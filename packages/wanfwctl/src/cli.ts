@@ -197,6 +197,36 @@ export function buildProgram(deps: CliDeps): Command {
       });
     });
 
+  plugin
+    .command("invoke <id> <task> [inputJson]")
+    .description("Manually invoke a trusted plugin's task (debugging aid; the reconciler does this automatically from T3.x)")
+    .option("--wall-ms <n>", "wall-clock timeout in milliseconds", (v) => parseInt(v, 10), 30000)
+    .action(async (id: string, task: string, inputJson: string | undefined, opts: { wallMs: number }) => {
+      let input: unknown = {};
+      if (inputJson) {
+        try {
+          input = JSON.parse(inputJson);
+        } catch {
+          deps.stderr("error: inputJson must be valid JSON");
+          process.exitCode = EXIT_CODES.usage;
+          return;
+        }
+      }
+      await withAdminRequest(
+        deps,
+        "POST",
+        `/plugins/${encodeURIComponent(id)}/invoke`,
+        // memMb floor: V8 reserves a large CodeRange/heap arena at startup
+        // regardless of actual usage, so any limit much below ~700MB kills
+        // even a completely idle Node process under Linux prlimit --as
+        // before it can do anything (discovered empirically in T2.6).
+        { task, input, limits: { wallMs: opts.wallMs, memMb: 768, cpuSeconds: 30 } },
+        (body) => {
+          deps.stdout(JSON.stringify(body, null, 2));
+        },
+      );
+    });
+
   return program;
 }
 

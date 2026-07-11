@@ -20,6 +20,7 @@ export const SECURITY_RELEVANT_TYPES = new Set([
   "powerful.execute",
   "secret.set",
   "secret.unset",
+  "plugin.invoke.refused",
 ]);
 
 export interface AuditEntryInput {

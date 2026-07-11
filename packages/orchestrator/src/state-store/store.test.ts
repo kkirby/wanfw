@@ -70,6 +70,30 @@ describe("StateStore", () => {
     expect(store.listTrustRecords(true)).toHaveLength(1);
   });
 
+  it("trust_records: re-trusting the same (plugin_id, version) after untrust upserts and clears revoked_at", () => {
+    const { store } = openTestStore();
+    const insert = (sha256: string) =>
+      store.insertTrustRecord({
+        plugin_id: "deploy-docker",
+        version: "0.1.0",
+        sha256,
+        granted_caps_json: "[]",
+        sig: "sig1",
+        created_at: new Date().toISOString(),
+      });
+
+    insert("abc123");
+    store.revokeTrustRecord("deploy-docker", "0.1.0");
+    expect(store.listTrustRecords()).toHaveLength(0);
+
+    // Re-trust with a new hash (e.g. a re-staged, functionally identical bundle).
+    insert("def456");
+    const live = store.listTrustRecords();
+    expect(live).toHaveLength(1);
+    expect(live[0]?.sha256).toBe("def456");
+    expect(live[0]?.revoked_at).toBeNull();
+  });
+
   it("grants: insert/list/revoke, scoped per plugin", () => {
     const { store } = openTestStore();
     const id = store.insertGrant({

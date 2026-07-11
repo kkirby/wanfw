@@ -79,10 +79,20 @@ export class StateStore {
 
   // -- trust_records -------------------------------------------------------
   insertTrustRecord(row: Omit<TrustRecordRow, "revoked_at">): void {
+    // Re-trusting the same (plugin_id, version) after an untrust is legal
+    // (the operator un-trusted, then decided to trust it again): untrust
+    // never deletes the row (audit history must survive), so this upserts
+    // rather than raw-inserting, clearing revoked_at on the new trust.
     this.db
       .prepare(
         `INSERT INTO trust_records (plugin_id, version, sha256, granted_caps_json, sig, created_at)
-         VALUES (@plugin_id, @version, @sha256, @granted_caps_json, @sig, @created_at)`,
+         VALUES (@plugin_id, @version, @sha256, @granted_caps_json, @sig, @created_at)
+         ON CONFLICT(plugin_id, version) DO UPDATE SET
+           sha256 = excluded.sha256,
+           granted_caps_json = excluded.granted_caps_json,
+           sig = excluded.sig,
+           created_at = excluded.created_at,
+           revoked_at = NULL`,
       )
       .run(row);
   }

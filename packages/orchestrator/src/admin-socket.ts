@@ -11,6 +11,7 @@ import {
   untrustPlugin,
   TrustFlowError,
   type TrustFlowDeps,
+  invokeTrustedPlugin,
 } from "./trust/index.js";
 
 /** Mutable holder so `key import`/`key rotate` can swap the live manager instance. */
@@ -164,6 +165,34 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
         return { status: 404, body: { error: "not_found", message: err.message } };
       }
       throw err;
+    }
+  });
+
+  router.register("POST", "/plugins/:id/invoke", async ({ params, body }) => {
+    const { task, input, limits } = (body ?? {}) as {
+      task?: string;
+      input?: unknown;
+      limits?: { wallMs: number; memMb: number; cpuSeconds: number };
+    };
+    if (!task) {
+      return { status: 400, body: { error: "usage", message: "task is required" } };
+    }
+    const invokeDeps = { store, auditLog, pluginConnectionHolder: deps.pluginConnectionHolder, bundlesDir: deps.bundlesDir };
+    try {
+      const result = await invokeTrustedPlugin(
+        invokeDeps,
+        params.id!,
+        task,
+        input ?? {},
+        // See wanfwctl's cli.ts for the memMb floor rationale (V8 startup cost).
+        limits ?? { wallMs: 30_000, memMb: 768, cpuSeconds: 30 },
+      );
+      return { status: 200, body: result };
+    } catch (err) {
+      if (err instanceof TrustFlowError) {
+        return { status: 404, body: { error: "not_found", message: err.message } };
+      }
+      return { status: 502, body: { error: "invoke_failed", message: (err as Error).message } };
     }
   });
 

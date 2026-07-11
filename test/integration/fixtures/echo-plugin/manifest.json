@@ -1,0 +1,12 @@
+{
+  "manifestVersion": 1,
+  "id": "echo-test-fixture",
+  "version": "0.1.0",
+  "frameworkApi": "^1.0",
+  "types": ["deploy"],
+  "entrypoint": "dist/main.js",
+  "runtime": "node22",
+  "capabilities": [
+    { "cap": "docker.image.pull", "scope": { "repos": ["*"] }, "reason": "M1 echo test fixture" }
+  ]
+}

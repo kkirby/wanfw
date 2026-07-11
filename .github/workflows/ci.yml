@@ -47,3 +47,8 @@ jobs:
       # run.sh brings the stack up, asserts §12.5, and tears down itself.
       - name: Run integration assertions (§12.5)
         run: bash test/integration/run.sh
+
+      # M1 acceptance (spec §15): trusted echo invoke, tampered-bundle
+      # refusal, out-of-grant rejection, wallMs timeout kill.
+      - name: Run M1 plugin runtime acceptance
+        run: bash test/integration/m1-plugin-runtime.sh
