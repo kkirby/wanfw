@@ -13,6 +13,8 @@ FROM deps AS build
 RUN pnpm --filter @wanfw/core-schemas... --filter @wanfw/orchestrator... build
 
 FROM base AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system wanfw && useradd --system --gid wanfw --home-dir /app --shell /usr/sbin/nologin wanfw
 WORKDIR /app
 COPY --from=build /app /app
