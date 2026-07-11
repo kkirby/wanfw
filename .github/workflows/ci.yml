@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm -r build
+
+      - name: Unit tests
+        run: pnpm -r test
+
+  image-build:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build framework images
+        run: |
+          docker compose -f deploy/docker-compose.yml build
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: image-build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bring up compose stack
+        run: docker compose -f deploy/docker-compose.yml up -d --build
+
+      - name: Run integration assertions (§12.5)
+        run: bash test/integration/run.sh
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down -v
