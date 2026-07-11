@@ -42,7 +42,7 @@ export interface StatusSocketDeps {
 export function buildStatusSocketRouter(
   heartbeat: HeartbeatState,
   nudge: NudgeState,
-  extra?: { store: StateStore; stagingDir: string },
+  extra?: { store: StateStore; stagingDir: string; onNudge?: () => void },
 ): JsonUdsRouter {
   const router = new JsonUdsRouter();
 
@@ -74,6 +74,7 @@ export function buildStatusSocketRouter(
   router.register("POST", "/nudge", async () => {
     nudge.nudgedAt = new Date().toISOString();
     nudge.count += 1;
+    extra?.onNudge?.();
     return { status: 202, body: { acknowledged: true } };
   });
 

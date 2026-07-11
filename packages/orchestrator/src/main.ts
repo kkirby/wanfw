@@ -12,6 +12,7 @@ import { AuditLog } from "./audit-log.js";
 import { listenPluginSocket } from "./plugin-socket.js";
 import type { JsonRpcConnection } from "@wanfw/pluginhost";
 import { buildHostApiDispatcher } from "./host-api/index.js";
+import { loadDesiredState, watchDesiredState, type DesiredState } from "./desired-state/index.js";
 
 const log = createLogger("orchestrator");
 const paths = resolvePaths();
@@ -45,8 +46,40 @@ const nudgeState: NudgeState = { nudgedAt: null, count: 0 };
 
 const heartbeat = startHeartbeat(paths.statusDir, heartbeatState);
 
+// Reconciler (T3.4) will replace this with the real PLAN->VALIDATE->GATE->
+// EXECUTE->OBSERVE pipeline; for now the loader is exercised end-to-end so
+// desired-state changes are visibly picked up and validation errors surface
+// in the logs, with the latest snapshot held for later stages to consume.
+let latestDesiredState: DesiredState = { services: new Map(), pluginConfigs: new Map(), errors: [] };
+
+async function reloadDesiredState(): Promise<void> {
+  try {
+    latestDesiredState = await loadDesiredState(paths.desiredDir);
+    if (latestDesiredState.errors.length > 0) {
+      log.warn("desired-state reload found document errors", {
+        errors: latestDesiredState.errors,
+      });
+    } else {
+      log.info("desired-state reloaded", {
+        hasFramework: latestDesiredState.framework !== undefined,
+        serviceCount: latestDesiredState.services.size,
+        pluginConfigCount: latestDesiredState.pluginConfigs.size,
+      });
+    }
+  } catch (err) {
+    log.error("desired-state reload failed", { message: (err as Error).message });
+  }
+}
+
+const desiredStateWatcher = watchDesiredState(paths.desiredDir, () => void reloadDesiredState());
+await reloadDesiredState();
+
 const statusServer: Server = listenOnUnixSocket(
-  buildStatusSocketRouter(heartbeatState, nudgeState, { store: stateStore, stagingDir: paths.stagingDir }),
+  buildStatusSocketRouter(heartbeatState, nudgeState, {
+    store: stateStore,
+    stagingDir: paths.stagingDir,
+    onNudge: () => desiredStateWatcher.nudge(),
+  }),
   paths.statusSocketPath,
   0o660,
 );
@@ -86,6 +119,7 @@ log.info("plugin socket listening", { path: paths.pluginSocketPath });
 function shutdown(signal: string): void {
   log.info("shutting down", { signal });
   heartbeat.stop();
+  void desiredStateWatcher.stop();
   statusServer.close();
   adminServer.close();
   pluginServer.close();
