@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "echo 'tier1 build placeholder (T1.4)' ",
+    "start": "node src/placeholder-server.mjs",
     "test": "vitest run",
     "typecheck": "echo ok"
   },

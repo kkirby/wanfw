@@ -1,0 +1,81 @@
+# wanfw framework stack. Matches design-spec.md Appendix A for mounts and
+# isolation (normative); everything else here is implementation detail.
+# TODO(T6.3): pin image digests, add healthchecks.
+name: wanfw
+
+services:
+  tier1:
+    build:
+      context: ..
+      dockerfile: deploy/tier1.Dockerfile
+    image: wanfw/tier1:dev
+    container_name: wanfw-tier1
+    networks: [wanfw_admin]
+    ports:
+      - "8443:8443"
+    volumes:
+      - wanfw_desired:/data/desired
+      - wanfw_status:/data/status:ro
+      - wanfw_staging:/data/staging
+      - wanfw_rpc_status:/run/wanfw
+      - wanfw_tier1state:/data/state
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: ["/tmp"]
+    restart: unless-stopped
+
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: deploy/orchestrator.Dockerfile
+    image: wanfw/orchestrator:dev
+    container_name: wanfw-orchestrator
+    network_mode: "none"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - wanfw_desired:/data/desired:ro
+      - wanfw_status:/data/status
+      - wanfw_staging:/data/staging:ro
+      - wanfw_bundles:/data/bundles
+      - wanfw_state:/data/state
+      - wanfw_secrets:/data/secrets
+      - wanfw_certs:/data/certs
+      - wanfw_proxycfg:/data/proxycfg
+      - wanfw_rpc_status:/run/wanfw/status
+      - wanfw_rpc_plugin:/run/wanfw/plugin
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  pluginhost:
+    build:
+      context: ..
+      dockerfile: deploy/pluginhost.Dockerfile
+    image: wanfw/pluginhost:dev
+    container_name: wanfw-pluginhost
+    networks: [wanfw_egress]
+    volumes:
+      - wanfw_bundles:/data/bundles:ro
+      - wanfw_rpc_plugin:/run/wanfw
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: ["/tmp"]
+    restart: unless-stopped
+
+networks:
+  wanfw_admin: {}
+  wanfw_egress: {}
+
+volumes:
+  wanfw_desired: {}
+  wanfw_status: {}
+  wanfw_staging: {}
+  wanfw_bundles: {}
+  wanfw_state: {}
+  wanfw_secrets: {}
+  wanfw_certs: {}
+  wanfw_proxycfg: {}
+  wanfw_rpc_status: {}
+  wanfw_rpc_plugin: {}
+  wanfw_tier1state: {}
