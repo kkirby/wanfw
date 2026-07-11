@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wanfw.dev/schemas/manifest.schema.json",
+  "title": "Plugin manifest (§6.2)",
+  "type": "object",
+  "properties": {
+    "manifestVersion": { "type": "integer", "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "frameworkApi": { "type": "string", "pattern": "^\\^\\d+\\.\\d+(\\.\\d+)?$" },
+    "types": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "enum": ["deploy", "network-provider", "proxy-engine", "cert-issuer", "dns-provider"]
+      }
+    },
+    "entrypoint": { "type": "string", "minLength": 1 },
+    "runtime": { "type": "string", "enum": ["node22"] },
+    "configSchema": { "type": "string" },
+    "migrations": { "type": "string" },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "cap": { "type": "string", "minLength": 1 },
+          "scope": { "type": "object" },
+          "reason": { "type": "string", "minLength": 1 },
+          "enforcement": { "type": "string", "enum": ["enforced", "declared"] }
+        },
+        "required": ["cap", "scope", "reason"],
+        "additionalProperties": false
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "properties": {
+        "settings": { "type": "object" },
+        "roles": { "type": "array", "items": { "type": "string" } },
+        "plugins": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["manifestVersion", "id", "version", "frameworkApi", "types", "entrypoint", "runtime", "capabilities"],
+  "additionalProperties": false
+}

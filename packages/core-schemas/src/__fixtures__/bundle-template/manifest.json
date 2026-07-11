@@ -1,0 +1,16 @@
+{
+  "manifestVersion": 1,
+  "id": "dns-namecheap",
+  "version": "0.1.0",
+  "frameworkApi": "^1.0",
+  "types": ["dns-provider"],
+  "entrypoint": "dist/main.js",
+  "runtime": "node22",
+  "capabilities": [
+    {
+      "cap": "dns.record.write",
+      "scope": { "zones": ["${framework.domain}", "sub.${framework.domain}"] },
+      "reason": "Namecheap API record management scoped to the configured domain"
+    }
+  ]
+}

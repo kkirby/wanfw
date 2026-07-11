@@ -5,3 +5,4 @@ export * from "./capabilities.js";
 export * from "./projection.js";
 export * from "./schemas.js";
 export * from "./validators.js";
+export * from "./manifest.js";

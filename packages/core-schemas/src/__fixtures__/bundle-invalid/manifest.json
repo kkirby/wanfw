@@ -1,0 +1,10 @@
+{
+  "manifestVersion": 1,
+  "id": "Bad_Id_Uppercase",
+  "version": "not-a-semver",
+  "frameworkApi": "^1.0",
+  "types": ["not-a-real-type"],
+  "entrypoint": "dist/main.js",
+  "runtime": "node22",
+  "capabilities": []
+}

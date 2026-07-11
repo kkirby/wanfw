@@ -1,0 +1,33 @@
+{
+  "manifestVersion": 1,
+  "id": "cert-letsencrypt-dns01",
+  "version": "0.1.0",
+  "frameworkApi": "^1.0",
+  "types": ["cert-issuer"],
+  "entrypoint": "dist/main.js",
+  "runtime": "node22",
+  "configSchema": "config.schema.json",
+  "migrations": "dist/migrations.js",
+  "capabilities": [
+    {
+      "cap": "dns.record.write",
+      "scope": { "zones": ["${framework.domain}"] },
+      "reason": "Create/remove _acme-challenge TXT records for DNS-01"
+    },
+    {
+      "cap": "secrets.read",
+      "scope": { "names": ["cert-letsencrypt-dns01/*"] },
+      "reason": "ACME account key"
+    },
+    {
+      "cap": "net.egress",
+      "scope": { "endpoints": ["https://acme-v02.api.letsencrypt.org"] },
+      "reason": "ACME API",
+      "enforcement": "declared"
+    }
+  ],
+  "dependencies": {
+    "settings": { "deploymentMode": "subdomain" },
+    "roles": ["dnsProvider"]
+  }
+}
