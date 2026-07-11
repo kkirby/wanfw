@@ -32,8 +32,8 @@ async function withAdminRequest(
       process.exitCode = EXIT_CODES.internalError;
       return;
     }
-    onOk(res.body);
     process.exitCode = EXIT_CODES.ok;
+    onOk(res.body); // may override process.exitCode (e.g. audit tail --verify on tamper detection)
   } catch (err) {
     if (err instanceof AdminSocketUnreachableError) {
       deps.stderr(`error: orchestrator admin socket unreachable: ${err.message}`);
@@ -92,6 +92,33 @@ export function buildProgram(deps: CliDeps): Command {
       }
       await withAdminRequest(deps, "POST", "/key/import", { privateKeyPem }, (body) => {
         deps.stdout(`imported. new public key:\n${(body as { publicKeyPem: string }).publicKeyPem.trim()}`);
+      });
+    });
+
+  const audit = program.command("audit").description("Audit log operations (§12.3)");
+
+  audit
+    .command("tail")
+    .description("Print audit log entries")
+    .option("--verify", "recompute the hash chain and check checkpoint signatures")
+    .action(async (opts: { verify?: boolean }) => {
+      if (opts.verify) {
+        await withAdminRequest(deps, "POST", "/audit/verify", undefined, (body) => {
+          const result = body as { valid: boolean; entryCount: number; failedAtSeq?: number; reason?: string };
+          if (result.valid) {
+            deps.stdout(`ok: ${result.entryCount} entries, chain verified`);
+          } else {
+            deps.stderr(`TAMPER DETECTED at seq ${result.failedAtSeq}: ${result.reason}`);
+            process.exitCode = EXIT_CODES.refused;
+          }
+        });
+        return;
+      }
+      await withAdminRequest(deps, "GET", "/audit", undefined, (body) => {
+        const { entries } = body as { entries: unknown[] };
+        for (const entry of entries) {
+          deps.stdout(JSON.stringify(entry));
+        }
       });
     });
 

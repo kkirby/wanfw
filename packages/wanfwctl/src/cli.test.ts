@@ -123,4 +123,43 @@ describe("wanfwctl-inner CLI", () => {
     });
     expect(code).toBe(EXIT_CODES.usage);
   });
+
+  async function bootAuditRouter(verifyResult: object) {
+    const router = new JsonUdsRouter();
+    router.register("GET", "/audit", async () => ({
+      status: 200,
+      body: { entries: [{ seq: 1, type: "log.emit" }] },
+    }));
+    router.register("POST", "/audit/verify", async () => ({ status: 200, body: verifyResult }));
+    const dir = await mkdtemp(join(tmpdir(), "wanfw-cli-audit-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "admin.sock");
+    servers.push(listenOnUnixSocket(router, socketPath));
+    await new Promise((r) => setTimeout(r, 50));
+    return socketPath;
+  }
+
+  it("audit tail: prints entries as JSON lines", async () => {
+    const socketPath = await bootAuditRouter({ valid: true, entryCount: 1 });
+    const out = captureOutput();
+    const code = await runCli(["audit", "tail"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(JSON.parse(out.lines[0]!)).toEqual({ seq: 1, type: "log.emit" });
+  });
+
+  it("audit tail --verify: exits 0 on a clean chain", async () => {
+    const socketPath = await bootAuditRouter({ valid: true, entryCount: 5 });
+    const out = captureOutput();
+    const code = await runCli(["audit", "tail", "--verify"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(out.lines.join("")).toMatch(/5 entries, chain verified/);
+  });
+
+  it("audit tail --verify: exits refused and reports the failure when tampered", async () => {
+    const socketPath = await bootAuditRouter({ valid: false, entryCount: 5, failedAtSeq: 3, reason: "hash mismatch" });
+    const out = captureOutput();
+    const code = await runCli(["audit", "tail", "--verify"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.refused);
+    expect(out.errLines.join("")).toMatch(/TAMPER DETECTED at seq 3/);
+  });
 });

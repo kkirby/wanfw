@@ -6,3 +6,4 @@ export * from "./status-socket.js";
 export * from "./admin-socket.js";
 export * from "./state-store/index.js";
 export * from "./signing-key.js";
+export * from "./audit-log.js";

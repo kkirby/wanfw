@@ -9,6 +9,7 @@ import { listenOnUnixSocket } from "./uds-server.js";
 import { StateStore } from "./state-store/index.js";
 import { SigningKeyManager } from "./signing-key.js";
 import type { SigningKeyHolder } from "./admin-socket.js";
+import { AuditLog } from "./audit-log.js";
 
 const log = createLogger("orchestrator");
 const paths = resolvePaths();
@@ -32,6 +33,9 @@ const signingKeyHolder: SigningKeyHolder = {
 };
 log.info("signing key ready", { publicKeyPem: signingKeyHolder.manager.getPublicKeyPem().trim() });
 
+const auditLog = new AuditLog(`${paths.stateDir}/audit.jsonl`, () => signingKeyHolder.manager);
+log.info("audit log ready", { path: `${paths.stateDir}/audit.jsonl` });
+
 const heartbeatState: HeartbeatState = {
   current: { phase: "pending-init", ts: new Date().toISOString(), version: ORCHESTRATOR_VERSION },
 };
@@ -47,7 +51,7 @@ const statusServer: Server = listenOnUnixSocket(
 log.info("status socket listening", { path: paths.statusSocketPath });
 
 const adminServer: Server = listenOnUnixSocket(
-  buildAdminSocketRouter({ heartbeat: heartbeatState, signingKeyHolder, store: stateStore }),
+  buildAdminSocketRouter({ heartbeat: heartbeatState, signingKeyHolder, store: stateStore, auditLog }),
   paths.adminSocketPath,
   0o600,
 );
