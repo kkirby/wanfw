@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Host wrapper (§2.3): reaches the admin socket via docker exec into the
+# orchestrator container. Requires Docker rights on the host, which is the
+# correct bar -- whoever can exec into the orchestrator already owns the
+# host in this threat model (ADR-6).
+set -euo pipefail
+exec docker exec -i wanfw-orchestrator wanfwctl-inner "$@"

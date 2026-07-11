@@ -5,12 +5,21 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "wanfwctl-inner": "dist/main.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
+  "dependencies": {
+    "@wanfw/core-schemas": "workspace:*",
+    "commander": "^12.1.0"
+  },
   "devDependencies": {
+    "@wanfw/orchestrator": "workspace:*",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4"
   }

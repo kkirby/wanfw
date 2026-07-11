@@ -10,7 +10,7 @@ COPY plugins ./plugins
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
-RUN pnpm --filter @wanfw/core-schemas... --filter @wanfw/orchestrator... build
+RUN pnpm --filter @wanfw/core-schemas... --filter @wanfw/orchestrator... --filter @wanfw/wanfwctl... build
 
 FROM base AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
@@ -21,6 +21,8 @@ COPY --from=build /app /app
 RUN mkdir -p /data/state /data/secrets /data/desired /data/status /data/staging /data/bundles /data/certs /data/proxycfg \
       /run/wanfw/status /run/wanfw/plugin /run/wanfw-admin \
     && chown -R wanfw:wanfw /data /run/wanfw /run/wanfw-admin
+RUN printf '#!/bin/sh\nexec node /app/packages/wanfwctl/dist/main.js "$@"\n' > /usr/local/bin/wanfwctl-inner \
+    && chmod +x /usr/local/bin/wanfwctl-inner
 ENV NODE_ENV=production
 USER wanfw
 WORKDIR /app/packages/orchestrator
