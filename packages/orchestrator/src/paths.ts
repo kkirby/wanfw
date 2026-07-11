@@ -7,6 +7,8 @@ export interface OrchestratorPaths {
   stateDir: string;
   statusDir: string;
   desiredDir: string;
+  stagingDir: string;
+  bundlesDir: string;
   statusSocketDir: string;
   pluginSocketDir: string;
   adminSocketDir: string;
@@ -26,6 +28,8 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Orchestrator
     stateDir: `${dataRoot}/state`,
     statusDir: `${dataRoot}/status`,
     desiredDir: `${dataRoot}/desired`,
+    stagingDir: `${dataRoot}/staging`,
+    bundlesDir: `${dataRoot}/bundles`,
     statusSocketDir,
     pluginSocketDir,
     adminSocketDir,

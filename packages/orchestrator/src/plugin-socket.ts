@@ -16,6 +16,7 @@ export function listenPluginSocket(
   socketPath: string,
   log: Logger,
   registerMethods: (connection: JsonRpcConnection) => void,
+  onDisconnect?: () => void,
 ): Server {
   const dir = dirname(socketPath);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -27,7 +28,10 @@ export function listenPluginSocket(
     log.info("pluginhost connected", { socketPath });
     const connection = new JsonRpcConnection(socket, socket);
     registerMethods(connection);
-    socket.on("close", () => log.info("pluginhost disconnected", { socketPath }));
+    socket.on("close", () => {
+      log.info("pluginhost disconnected", { socketPath });
+      onDisconnect?.();
+    });
   });
 
   server.listen(socketPath);

@@ -1,5 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { JsonRpcConnection, type MethodHandler } from "./jsonrpc.js";
 import { runInvocation, type InvocationJob, type ChildRunnerDeps } from "./child-runner.js";
 
@@ -8,6 +8,25 @@ export interface BuiltinInfo {
   version: string;
   manifest: unknown;
   sha256: string;
+}
+
+export interface BuiltinFile {
+  relPath: string;
+  contentBase64: string;
+}
+
+async function listFilesRecursive(dir: string, base = dir): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await listFilesRecursive(full, base)));
+    } else if (entry.isFile()) {
+      files.push(full);
+    }
+  }
+  return files;
 }
 
 export interface SupervisorDeps {
@@ -51,7 +70,19 @@ export function registerSupervisorMethods(connection: JsonRpcConnection, deps: S
     const manifestRaw = await readFile(join(bundleDir, "manifest.json"), "utf8");
     const manifest = JSON.parse(manifestRaw) as { version: string };
     const sha256 = await deps.hashBundleDirFn(bundleDir);
-    return { id, version: manifest.version, sha256, bundleDir };
+
+    // Streams the bundle's actual bytes (interpretation 2: the orchestrator
+    // cannot read the pluginhost image's filesystem, so this is how a
+    // built-in gets copied into wanfw_bundles exactly like a third-party
+    // bundle -- same trust flow either way).
+    const absFiles = await listFilesRecursive(bundleDir);
+    const files: BuiltinFile[] = [];
+    for (const absPath of absFiles) {
+      const contents = await readFile(absPath);
+      files.push({ relPath: relative(bundleDir, absPath), contentBase64: contents.toString("base64") });
+    }
+
+    return { id, version: manifest.version, sha256, files };
   });
 
   connection.registerMethod("helper.wanIp", async (params) => {

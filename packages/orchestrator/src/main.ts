@@ -4,11 +4,10 @@ import { createLogger } from "./logger.js";
 import { resolvePaths } from "./paths.js";
 import { startHeartbeat, ORCHESTRATOR_VERSION, type HeartbeatState } from "./heartbeat.js";
 import { buildStatusSocketRouter, type NudgeState } from "./status-socket.js";
-import { buildAdminSocketRouter } from "./admin-socket.js";
+import { buildAdminSocketRouter, type SigningKeyHolder, type PluginConnectionHolder } from "./admin-socket.js";
 import { listenOnUnixSocket } from "./uds-server.js";
 import { StateStore } from "./state-store/index.js";
 import { SigningKeyManager } from "./signing-key.js";
-import type { SigningKeyHolder } from "./admin-socket.js";
 import { AuditLog } from "./audit-log.js";
 import { listenPluginSocket } from "./plugin-socket.js";
 import type { JsonRpcConnection } from "@wanfw/pluginhost";
@@ -20,7 +19,7 @@ const paths = resolvePaths();
 // Tolerate a missing framework document: this is pre-init state (T5.3 writes
 // the real framework doc later). Initialize data dirs so a fresh volume boots
 // cleanly.
-for (const dir of [paths.stateDir, paths.statusDir, paths.desiredDir]) {
+for (const dir of [paths.stateDir, paths.statusDir, paths.desiredDir, paths.stagingDir, paths.bundlesDir]) {
   mkdirSync(dir, { recursive: true });
 }
 
@@ -53,17 +52,35 @@ const statusServer: Server = listenOnUnixSocket(
 );
 log.info("status socket listening", { path: paths.statusSocketPath });
 
+const pluginConnectionHolder: PluginConnectionHolder = {};
+
 const adminServer: Server = listenOnUnixSocket(
-  buildAdminSocketRouter({ heartbeat: heartbeatState, signingKeyHolder, store: stateStore, auditLog }),
+  buildAdminSocketRouter({
+    heartbeat: heartbeatState,
+    signingKeyHolder,
+    store: stateStore,
+    auditLog,
+    pluginConnectionHolder,
+    stagingDir: paths.stagingDir,
+    bundlesDir: paths.bundlesDir,
+  }),
   paths.adminSocketPath,
   0o600,
 );
 log.info("admin socket listening", { path: paths.adminSocketPath });
 
 const hostApiDispatch = buildHostApiDispatcher(stateStore, log);
-const pluginServer = listenPluginSocket(paths.pluginSocketPath, log, (connection: JsonRpcConnection) => {
-  connection.registerMethod("host.call", hostApiDispatch);
-});
+const pluginServer = listenPluginSocket(
+  paths.pluginSocketPath,
+  log,
+  (connection: JsonRpcConnection) => {
+    connection.registerMethod("host.call", hostApiDispatch);
+    pluginConnectionHolder.connection = connection;
+  },
+  () => {
+    pluginConnectionHolder.connection = undefined;
+  },
+);
 log.info("plugin socket listening", { path: paths.pluginSocketPath });
 
 function shutdown(signal: string): void {

@@ -122,6 +122,81 @@ export function buildProgram(deps: CliDeps): Command {
       });
     });
 
+  const plugin = program.command("plugin").description("Plugin trust flow (ADR-5)");
+
+  plugin
+    .command("list")
+    .description("List trusted plugins, or pending staged bundles")
+    .option("--pending", "list staged bundles awaiting trust instead of already-trusted plugins")
+    .action(async (opts: { pending?: boolean }) => {
+      const path = opts.pending ? "/plugins?pending=true" : "/plugins";
+      await withAdminRequest(deps, "GET", path, undefined, (body) => {
+        deps.stdout(JSON.stringify(body, null, 2));
+      });
+    });
+
+  plugin
+    .command("show <id>")
+    .description("Show a trusted plugin's manifest and granted capabilities")
+    .action(async (id: string) => {
+      await withAdminRequest(deps, "GET", `/plugins/${encodeURIComponent(id)}`, undefined, (body) => {
+        deps.stdout(JSON.stringify(body, null, 2));
+      });
+    });
+
+  plugin
+    .command("trust [idAtHash]")
+    .description("Trust a staged bundle (id@sha256), or all built-ins with --builtin-all")
+    .option("--builtin-all", "batch-trust every built-in the pluginhost ships")
+    .option("--yes", "skip the confirmation prompt (required for non-interactive use)")
+    .action(async (idAtHash: string | undefined, opts: { builtinAll?: boolean; yes?: boolean }) => {
+      if (opts.builtinAll) {
+        if (!opts.yes) {
+          deps.stdout("Re-run with --yes to confirm batch-trusting every built-in plugin.");
+          process.exitCode = EXIT_CODES.ok;
+          return;
+        }
+        await withAdminRequest(deps, "POST", "/plugins/trust-builtins", undefined, (body) => {
+          deps.stdout(JSON.stringify(body, null, 2));
+        });
+        return;
+      }
+
+      if (!idAtHash || !idAtHash.includes("@")) {
+        deps.stderr("usage: wanfwctl plugin trust <id>@<sha256> [--yes]");
+        process.exitCode = EXIT_CODES.usage;
+        return;
+      }
+      const [id, sha256] = idAtHash.split("@", 2) as [string, string];
+      if (!opts.yes) {
+        deps.stdout(`Re-run with --yes to confirm trusting ${id}@${sha256} after reviewing its capability requests.`);
+        process.exitCode = EXIT_CODES.ok;
+        return;
+      }
+      await withAdminRequest(deps, "POST", "/plugins/trust", { id, sha256 }, (body) => {
+        const result = body as { grantedCaps: string[]; upgradeDiff?: { added: unknown[]; removed: unknown[] } };
+        deps.stdout(`trusted ${id}@${sha256}. capabilities: ${result.grantedCaps.join(", ")}`);
+        if (result.upgradeDiff && (result.upgradeDiff.added.length || result.upgradeDiff.removed.length)) {
+          deps.stdout(`upgrade diff: +${result.upgradeDiff.added.length} -${result.upgradeDiff.removed.length} capabilities`);
+        }
+      });
+    });
+
+  plugin
+    .command("untrust <id>")
+    .description("Revoke trust in a plugin; subsequent plans referencing it fail validation")
+    .option("--yes", "skip the confirmation prompt (required for non-interactive use)")
+    .action(async (id: string, opts: { yes?: boolean }) => {
+      if (!opts.yes) {
+        deps.stdout(`Re-run with --yes to confirm untrusting ${id}.`);
+        process.exitCode = EXIT_CODES.ok;
+        return;
+      }
+      await withAdminRequest(deps, "POST", "/plugins/untrust", { id }, (body) => {
+        deps.stdout(JSON.stringify(body, null, 2));
+      });
+    });
+
   return program;
 }
 

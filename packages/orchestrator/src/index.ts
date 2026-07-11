@@ -9,3 +9,4 @@ export * from "./signing-key.js";
 export * from "./audit-log.js";
 export * from "./plugin-socket.js";
 export * from "./host-api/index.js";
+export * from "./trust/index.js";

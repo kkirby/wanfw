@@ -60,6 +60,24 @@ describe("registerSupervisorMethods", () => {
     expect(result.sha256).toBe("fakehash456");
   });
 
+  it("builtins.read streams real file bytes the orchestrator can reconstruct on disk", async () => {
+    const builtinsDir = await makeBuiltinsDir();
+    const [orchestrator, pluginhost] = makePair();
+    registerSupervisorMethods(pluginhost, {
+      builtinsDir,
+      hashBundleDirFn: async () => "fakehash789",
+      hostApiHandler: async () => ({}),
+    });
+
+    const result = (await orchestrator.call("builtins.read", { id: "deploy-docker" })) as {
+      files: Array<{ relPath: string; contentBase64: string }>;
+    };
+    const manifestFile = result.files.find((f) => f.relPath === "manifest.json");
+    expect(manifestFile).toBeDefined();
+    const decoded = JSON.parse(Buffer.from(manifestFile!.contentBase64, "base64").toString("utf8"));
+    expect(decoded).toEqual({ manifestVersion: 1, id: "deploy-docker", version: "0.1.0" });
+  });
+
   it("invoke dispatches to the child runner and returns its result", async () => {
     const echoBundleDir = await mkdtemp(join(tmpdir(), "wanfw-invoke-fixture-"));
     dirs.push(echoBundleDir);

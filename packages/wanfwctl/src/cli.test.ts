@@ -162,4 +162,101 @@ describe("wanfwctl-inner CLI", () => {
     expect(code).toBe(EXIT_CODES.refused);
     expect(out.errLines.join("")).toMatch(/TAMPER DETECTED at seq 3/);
   });
+
+  async function bootPluginRouter() {
+    const router = new JsonUdsRouter();
+    let trustCalls = 0;
+    router.register("GET", "/plugins", async () => ({ status: 200, body: { trusted: [] } }));
+    router.register("GET", "/plugins/:id", async ({ params }) =>
+      params.id === "deploy-docker"
+        ? { status: 200, body: { trusted: [{ plugin_id: "deploy-docker" }], grants: [] } }
+        : { status: 404, body: { error: "not_found" } },
+    );
+    router.register("POST", "/plugins/trust", async ({ body }) => {
+      trustCalls++;
+      const { id, sha256 } = body as { id: string; sha256: string };
+      return { status: 200, body: { pluginId: id, version: "0.1.0", sha256, grantedCaps: ["docker.image.pull"] } };
+    });
+    router.register("POST", "/plugins/trust-builtins", async () => ({
+      status: 200,
+      body: { trusted: [{ pluginId: "deploy-docker" }] },
+    }));
+    router.register("POST", "/plugins/untrust", async ({ body }) => ({
+      status: 200,
+      body: { pluginId: (body as { id: string }).id, untrusted: true },
+    }));
+    const dir = await mkdtemp(join(tmpdir(), "wanfw-cli-plugin-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "admin.sock");
+    servers.push(listenOnUnixSocket(router, socketPath));
+    await new Promise((r) => setTimeout(r, 50));
+    return { socketPath, trustCallCount: () => trustCalls };
+  }
+
+  it("plugin list: prints trusted plugins", async () => {
+    const { socketPath } = await bootPluginRouter();
+    const out = captureOutput();
+    const code = await runCli(["plugin", "list"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(JSON.parse(out.lines.join(""))).toEqual({ trusted: [] });
+  });
+
+  it("plugin show: prints 404 body and internalError exit for an untrusted id", async () => {
+    const { socketPath } = await bootPluginRouter();
+    const out = captureOutput();
+    const code = await runCli(["plugin", "show", "nope"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.internalError);
+  });
+
+  it("plugin trust without --yes does not call the admin socket (dry-run confirmation)", async () => {
+    const { socketPath, trustCallCount } = await bootPluginRouter();
+    const out = captureOutput();
+    const code = await runCli(["plugin", "trust", "deploy-docker@abc123"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(trustCallCount()).toBe(0);
+    expect(out.lines.join("")).toMatch(/Re-run with --yes/);
+  });
+
+  it("plugin trust --yes calls the admin socket and prints granted capabilities", async () => {
+    const { socketPath, trustCallCount } = await bootPluginRouter();
+    const out = captureOutput();
+    const code = await runCli(["plugin", "trust", "deploy-docker@abc123", "--yes"], {
+      adminSocketPath: socketPath,
+      ...out,
+    });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(trustCallCount()).toBe(1);
+    expect(out.lines.join("")).toMatch(/trusted deploy-docker@abc123/);
+  });
+
+  it("plugin trust: usage error when idAtHash is missing the @ separator", async () => {
+    const { socketPath } = await bootPluginRouter();
+    const out = captureOutput();
+    const code = await runCli(["plugin", "trust", "deploy-docker", "--yes"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.usage);
+  });
+
+  it("plugin trust --builtin-all requires --yes too", async () => {
+    const { socketPath } = await bootPluginRouter();
+    const out = captureOutput();
+    const code = await runCli(["plugin", "trust", "--builtin-all"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(out.lines.join("")).toMatch(/Re-run with --yes/);
+  });
+
+  it("plugin trust --builtin-all --yes trusts every built-in", async () => {
+    const { socketPath } = await bootPluginRouter();
+    const out = captureOutput();
+    const code = await runCli(["plugin", "trust", "--builtin-all", "--yes"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(JSON.parse(out.lines.join(""))).toEqual({ trusted: [{ pluginId: "deploy-docker" }] });
+  });
+
+  it("plugin untrust --yes calls the admin socket", async () => {
+    const { socketPath } = await bootPluginRouter();
+    const out = captureOutput();
+    const code = await runCli(["plugin", "untrust", "deploy-docker", "--yes"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(JSON.parse(out.lines.join(""))).toEqual({ pluginId: "deploy-docker", untrusted: true });
+  });
 });
