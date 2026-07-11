@@ -7,6 +7,8 @@ import { buildStatusSocketRouter, type NudgeState } from "./status-socket.js";
 import { buildAdminSocketRouter } from "./admin-socket.js";
 import { listenOnUnixSocket } from "./uds-server.js";
 import { StateStore } from "./state-store/index.js";
+import { SigningKeyManager } from "./signing-key.js";
+import type { SigningKeyHolder } from "./admin-socket.js";
 
 const log = createLogger("orchestrator");
 const paths = resolvePaths();
@@ -23,6 +25,13 @@ log.info("orchestrator starting", { version: ORCHESTRATOR_VERSION });
 const stateStore = new StateStore(`${paths.stateDir}/state.sqlite3`);
 log.info("state store ready", { path: `${paths.stateDir}/state.sqlite3` });
 
+const signingKeyPath = `${paths.stateDir}/signing.key`;
+const signingKeyHolder: SigningKeyHolder = {
+  manager: await SigningKeyManager.loadOrCreate(signingKeyPath),
+  keyPath: signingKeyPath,
+};
+log.info("signing key ready", { publicKeyPem: signingKeyHolder.manager.getPublicKeyPem().trim() });
+
 const heartbeatState: HeartbeatState = {
   current: { phase: "pending-init", ts: new Date().toISOString(), version: ORCHESTRATOR_VERSION },
 };
@@ -38,7 +47,7 @@ const statusServer: Server = listenOnUnixSocket(
 log.info("status socket listening", { path: paths.statusSocketPath });
 
 const adminServer: Server = listenOnUnixSocket(
-  buildAdminSocketRouter(heartbeatState),
+  buildAdminSocketRouter({ heartbeat: heartbeatState, signingKeyHolder, store: stateStore }),
   paths.adminSocketPath,
   0o600,
 );
