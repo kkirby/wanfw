@@ -39,7 +39,13 @@ importers:
       '@wanfw/core-schemas':
         specifier: workspace:*
         version: link:../core-schemas
+      better-sqlite3:
+        specifier: ^11.10.0
+        version: 11.10.0
     devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
       typescript:
         specifier: ^5.6.3
         version: 5.9.3

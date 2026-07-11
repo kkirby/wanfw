@@ -6,6 +6,7 @@ import { startHeartbeat, ORCHESTRATOR_VERSION, type HeartbeatState } from "./hea
 import { buildStatusSocketRouter, type NudgeState } from "./status-socket.js";
 import { buildAdminSocketRouter } from "./admin-socket.js";
 import { listenOnUnixSocket } from "./uds-server.js";
+import { StateStore } from "./state-store/index.js";
 
 const log = createLogger("orchestrator");
 const paths = resolvePaths();
@@ -18,6 +19,9 @@ for (const dir of [paths.stateDir, paths.statusDir, paths.desiredDir]) {
 }
 
 log.info("orchestrator starting", { version: ORCHESTRATOR_VERSION });
+
+const stateStore = new StateStore(`${paths.stateDir}/state.sqlite3`);
+log.info("state store ready", { path: `${paths.stateDir}/state.sqlite3` });
 
 const heartbeatState: HeartbeatState = {
   current: { phase: "pending-init", ts: new Date().toISOString(), version: ORCHESTRATOR_VERSION },
@@ -45,6 +49,7 @@ function shutdown(signal: string): void {
   heartbeat.stop();
   statusServer.close();
   adminServer.close();
+  stateStore.close();
   process.exit(0);
 }
 
