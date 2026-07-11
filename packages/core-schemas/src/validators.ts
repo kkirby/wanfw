@@ -1,16 +1,20 @@
-// ajv's CJS type exports don't line up cleanly with NodeNext + esModuleInterop;
-// import via createRequire to get the real constructor at runtime with a
-// hand-written type for what we actually use.
-import { createRequire } from "node:module";
+import * as Ajv2020Module from "ajv/dist/2020.js";
+import * as AjvFormatsModule from "ajv-formats";
 import type { ValidateFunction } from "ajv";
 import { CORE_SCHEMAS } from "./schemas.js";
 
-const require = createRequire(import.meta.url);
-const Ajv2020 = require("ajv/dist/2020.js") as new (opts: {
-  allErrors?: boolean;
-  strict?: boolean;
-}) => AjvInstance;
-const addFormats = require("ajv-formats") as (ajv: AjvInstance) => void;
+// Static imports (not createRequire) so bundlers that do dependency tracing
+// via static analysis -- notably Next.js's standalone output tracer, which
+// tier1 relies on -- can see and include ajv in their output. ajv/ajv-formats
+// ship CJS with a default export; the interop shape differs slightly between
+// plain tsc/node and webpack, hence the defensive `.default ?? module` below.
+type AjvCtorType = new (opts: { allErrors?: boolean; strict?: boolean }) => AjvInstance;
+type AddFormatsType = (ajv: AjvInstance) => void;
+
+const AjvCtor = ((Ajv2020Module as unknown as { default?: AjvCtorType }).default ??
+  (Ajv2020Module as unknown as AjvCtorType)) as AjvCtorType;
+const addFormats = ((AjvFormatsModule as unknown as { default?: AddFormatsType }).default ??
+  (AjvFormatsModule as unknown as AddFormatsType)) as AddFormatsType;
 
 export interface AjvInstance {
   opts: { strict?: boolean };
@@ -18,7 +22,7 @@ export interface AjvInstance {
 }
 
 export function createAjv(): AjvInstance {
-  const ajv = new Ajv2020({ allErrors: true, strict: true });
+  const ajv = new AjvCtor({ allErrors: true, strict: true });
   addFormats(ajv);
   return ajv;
 }

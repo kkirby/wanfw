@@ -43,3 +43,53 @@ export function orchRequest(method: string, path: string, body?: unknown): Promi
 export async function getFrameworkStatus(): Promise<OrchRequestResult> {
   return orchRequest("GET", "/status");
 }
+
+export interface TrustRecord {
+  plugin_id: string;
+  version: string;
+  sha256: string;
+  granted_caps_json: string;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+export interface StagedBundleManifest {
+  id: string;
+  version: string;
+  capabilities: Array<{ cap: string; scope: Record<string, unknown>; reason: string }>;
+}
+
+export interface StagedBundle {
+  dirName: string;
+  bundleDir: string;
+  sha256: string;
+  manifest?: StagedBundleManifest;
+  manifestErrors?: string[];
+}
+
+export interface GrantRecord {
+  id: number;
+  plugin_id: string;
+  cap: string;
+  scope_json: string;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+export async function listTrustedPlugins(): Promise<TrustRecord[]> {
+  const res = await orchRequest("GET", "/plugins");
+  return (res.body as { trusted: TrustRecord[] }).trusted;
+}
+
+export async function listPendingPlugins(): Promise<StagedBundle[]> {
+  const res = await orchRequest("GET", "/plugins?pending=true");
+  return (res.body as { staged: StagedBundle[] }).staged;
+}
+
+export async function getTrustedPlugin(
+  id: string,
+): Promise<{ trusted: TrustRecord[]; grants: GrantRecord[] } | undefined> {
+  const res = await orchRequest("GET", `/plugins/${encodeURIComponent(id)}`);
+  if (res.status !== 200) return undefined;
+  return res.body as { trusted: TrustRecord[]; grants: GrantRecord[] };
+}

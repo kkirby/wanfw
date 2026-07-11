@@ -11,6 +11,10 @@ RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
 ENV NEXT_TELEMETRY_DISABLED=1
+# next build's page-data collection imports lib/session-db.ts at module load
+# (it opens the sqlite file), so it needs a writable path during the build
+# itself; the real path is set at runtime via docker-compose environment.
+ENV WANFW_TIER1STATE_DB=/tmp/build-tier1.sqlite3
 RUN pnpm --filter @wanfw/tier1... build
 
 FROM base AS runtime

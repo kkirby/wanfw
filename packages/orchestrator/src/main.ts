@@ -46,7 +46,7 @@ const nudgeState: NudgeState = { nudgedAt: null, count: 0 };
 const heartbeat = startHeartbeat(paths.statusDir, heartbeatState);
 
 const statusServer: Server = listenOnUnixSocket(
-  buildStatusSocketRouter(heartbeatState, nudgeState),
+  buildStatusSocketRouter(heartbeatState, nudgeState, { store: stateStore, stagingDir: paths.stagingDir }),
   paths.statusSocketPath,
   0o660,
 );
