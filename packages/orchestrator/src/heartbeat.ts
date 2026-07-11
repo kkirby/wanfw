@@ -28,7 +28,13 @@ export function startHeartbeat(
 
   async function tick(): Promise<void> {
     state.current = { ...state.current, ts: new Date().toISOString() };
-    await atomicWriteFile(filePath, JSON.stringify(state.current), { mode: 0o644 });
+    try {
+      await atomicWriteFile(filePath, JSON.stringify(state.current), { mode: 0o644 });
+    } catch {
+      // A transient write failure (e.g. volume briefly unavailable, or the
+      // directory disappearing during test teardown) must not crash the
+      // process; the next tick retries.
+    }
   }
 
   void tick();

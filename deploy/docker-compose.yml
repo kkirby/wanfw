@@ -13,6 +13,9 @@ services:
     networks: [wanfw_admin]
     ports:
       - "8443:8443"
+    environment:
+      WANFW_STATUS_SOCKET_PATH: /run/wanfw/orch-status.sock
+      WANFW_TIER1STATE_DB: /data/state/tier1.sqlite3
     volumes:
       - wanfw_desired:/data/desired
       - wanfw_status:/data/status:ro

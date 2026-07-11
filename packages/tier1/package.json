@@ -4,12 +4,29 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "echo 'tier1 build placeholder (T1.4)' ",
-    "start": "node src/placeholder-server.mjs",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "node server.js",
+    "seed-admin": "node scripts/seed-admin.mjs",
     "test": "vitest run",
-    "typecheck": "echo ok"
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@mantine/core": "^7.17.3",
+    "@mantine/hooks": "^7.17.3",
+    "@node-rs/argon2": "^2.0.2",
+    "better-sqlite3": "^11.10.0",
+    "next": "^15.5.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "postcss": "^8.5.3",
+    "postcss-preset-mantine": "^1.17.0",
+    "typescript": "^5.6.3",
     "vitest": "^2.1.4"
   }
 }
