@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wanfw.dev/schemas/plugin-config.schema.json",
+  "title": "PluginConfig document spec envelope (§5.5, plugins/<id>.json)",
+  "type": "object",
+  "properties": {
+    "pluginId": { "type": "string", "minLength": 1 },
+    "config": {
+      "type": "object",
+      "description": "Open anchor. At runtime validated against the plugin's own configSchema."
+    }
+  },
+  "required": ["pluginId", "config"],
+  "additionalProperties": false
+}

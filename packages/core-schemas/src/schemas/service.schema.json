@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wanfw.dev/schemas/service.schema.json",
+  "title": "Service document spec (§5.4)",
+  "type": "object",
+  "properties": {
+    "deploy": {
+      "type": "object",
+      "description": "Open anchor. At runtime the composed schema (§5.5) mounts the bound deploy plugin's configSchema here. Core only requires the discriminator field.",
+      "properties": {
+        "plugin": { "type": "string", "minLength": 1 }
+      },
+      "required": ["plugin"]
+    },
+    "expose": {
+      "type": "object",
+      "properties": {
+        "hostname": { "type": "string", "minLength": 1 },
+        "backendPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "backendProtocol": { "type": "string", "enum": ["http", "https"] },
+        "isolationTier": { "type": "string", "enum": ["standard", "quarantine"], "default": "standard" },
+        "removeVolumesOnDelete": { "type": "boolean", "default": false }
+      },
+      "required": ["hostname", "backendPort", "backendProtocol"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["deploy", "expose"],
+  "additionalProperties": false
+}

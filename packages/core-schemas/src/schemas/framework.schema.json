@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wanfw.dev/schemas/framework.schema.json",
+  "title": "Framework document spec (§5.3)",
+  "type": "object",
+  "properties": {
+    "domain": { "type": "string", "minLength": 1 },
+    "deploymentMode": { "type": "string", "enum": ["subdomain", "port"] },
+    "acmeEmail": { "type": "string", "format": "email" },
+    "roles": {
+      "type": "object",
+      "properties": {
+        "networkProvider": { "type": "string" },
+        "proxyEngine": { "type": "string" },
+        "certIssuer": { "type": "string" },
+        "dnsProvider": { "type": "string" }
+      },
+      "required": ["networkProvider", "proxyEngine"],
+      "additionalProperties": false
+    },
+    "strictApprovals": { "type": "string", "enum": ["powerful", "all"], "default": "powerful" },
+    "network": {
+      "type": "object",
+      "properties": {
+        "lanInterface": { "type": "string" },
+        "macvlan": {
+          "type": "object",
+          "properties": {
+            "parent": { "type": "string" },
+            "reservedCidr": { "type": "string" },
+            "gateway": { "type": "string" }
+          },
+          "required": ["parent", "reservedCidr", "gateway"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["lanInterface"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["domain", "deploymentMode", "acmeEmail", "roles"],
+  "additionalProperties": false
+}
