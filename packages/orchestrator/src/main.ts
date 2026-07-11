@@ -12,6 +12,7 @@ import type { SigningKeyHolder } from "./admin-socket.js";
 import { AuditLog } from "./audit-log.js";
 import { listenPluginSocket } from "./plugin-socket.js";
 import type { JsonRpcConnection } from "@wanfw/pluginhost";
+import { buildHostApiDispatcher } from "./host-api/index.js";
 
 const log = createLogger("orchestrator");
 const paths = resolvePaths();
@@ -59,12 +60,9 @@ const adminServer: Server = listenOnUnixSocket(
 );
 log.info("admin socket listening", { path: paths.adminSocketPath });
 
+const hostApiDispatch = buildHostApiDispatcher(stateStore, log);
 const pluginServer = listenPluginSocket(paths.pluginSocketPath, log, (connection: JsonRpcConnection) => {
-  // T2.7 wires real capability-gated dispatch here; for now the connection
-  // accepts control-RPC traffic (builtins.list/read) with no host.call
-  // handler registered, so any invoke-time host API call correctly fails
-  // closed (method not found) rather than silently succeeding.
-  void connection;
+  connection.registerMethod("host.call", hostApiDispatch);
 });
 log.info("plugin socket listening", { path: paths.pluginSocketPath });
 

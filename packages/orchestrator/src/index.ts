@@ -8,3 +8,4 @@ export * from "./state-store/index.js";
 export * from "./signing-key.js";
 export * from "./audit-log.js";
 export * from "./plugin-socket.js";
+export * from "./host-api/index.js";
