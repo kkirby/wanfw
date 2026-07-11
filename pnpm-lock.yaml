@@ -39,6 +39,9 @@ importers:
       '@wanfw/core-schemas':
         specifier: workspace:*
         version: link:../core-schemas
+      '@wanfw/pluginhost':
+        specifier: workspace:*
+        version: link:../pluginhost
       better-sqlite3:
         specifier: ^11.10.0
         version: 11.10.0
@@ -63,6 +66,10 @@ importers:
         version: 2.1.9(@types/node@22.20.1)(sugarss@5.0.1(postcss@8.5.17))
 
   packages/pluginhost:
+    dependencies:
+      '@wanfw/core-schemas':
+        specifier: workspace:*
+        version: link:../core-schemas
     devDependencies:
       typescript:
         specifier: ^5.6.3

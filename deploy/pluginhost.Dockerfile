@@ -13,12 +13,24 @@ FROM deps AS build
 RUN pnpm --filter @wanfw/core-schemas... --filter @wanfw/pluginhost... --filter @wanfw/plugin-sdk... build
 
 FROM base AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends util-linux \
+    && rm -rf /var/lib/apt/lists/*
+# Two users defined per ADR-3's design (supervisor vs. spawned children as a
+# distinct uid); dropping privilege from the supervisor to wanfw-plugin at
+# spawn time requires the supervisor to hold CAP_SETUID/CAP_SETGID, which is
+# real complexity ADR-3 itself flags as a rejected-alternative tradeoff.
+# Deviation for T2.6 (recorded in PROGRESS.md): the supervisor runs as
+# `wanfw` non-root and children currently inherit that same uid rather than
+# `wanfw-plugin` -- no privileged parent, so no cross-uid separation yet.
+# Revisit with T6.3 hardening (grant CAP_SETUID+CAP_SETGID and drop them
+# again immediately after spawn, or move to a setuid helper).
 RUN groupadd --system wanfw && useradd --system --gid wanfw --home-dir /app --shell /usr/sbin/nologin wanfw \
     && groupadd --system wanfw-plugin && useradd --system --gid wanfw-plugin --home-dir /app --shell /usr/sbin/nologin wanfw-plugin
 WORKDIR /app
 COPY --from=build /app /app
-RUN mkdir -p /data/bundles /run/wanfw && chown -R wanfw:wanfw /data /run/wanfw
+RUN mkdir -p /data/bundles /run/wanfw /app/builtins && chown -R wanfw:wanfw /data /run/wanfw /app/builtins
 ENV NODE_ENV=production
+ENV WANFW_BUILTINS_DIR=/app/builtins
 USER wanfw
 WORKDIR /app/packages/pluginhost
 CMD ["node", "dist/main.js"]

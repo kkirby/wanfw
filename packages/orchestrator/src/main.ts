@@ -10,6 +10,8 @@ import { StateStore } from "./state-store/index.js";
 import { SigningKeyManager } from "./signing-key.js";
 import type { SigningKeyHolder } from "./admin-socket.js";
 import { AuditLog } from "./audit-log.js";
+import { listenPluginSocket } from "./plugin-socket.js";
+import type { JsonRpcConnection } from "@wanfw/pluginhost";
 
 const log = createLogger("orchestrator");
 const paths = resolvePaths();
@@ -57,11 +59,21 @@ const adminServer: Server = listenOnUnixSocket(
 );
 log.info("admin socket listening", { path: paths.adminSocketPath });
 
+const pluginServer = listenPluginSocket(paths.pluginSocketPath, log, (connection: JsonRpcConnection) => {
+  // T2.7 wires real capability-gated dispatch here; for now the connection
+  // accepts control-RPC traffic (builtins.list/read) with no host.call
+  // handler registered, so any invoke-time host API call correctly fails
+  // closed (method not found) rather than silently succeeding.
+  void connection;
+});
+log.info("plugin socket listening", { path: paths.pluginSocketPath });
+
 function shutdown(signal: string): void {
   log.info("shutting down", { signal });
   heartbeat.stop();
   statusServer.close();
   adminServer.close();
+  pluginServer.close();
   stateStore.close();
   process.exit(0);
 }
