@@ -14,7 +14,14 @@ import type { JsonRpcConnection } from "@wanfw/pluginhost";
 import { buildHostApiDispatcher } from "./host-api/index.js";
 import { watchDesiredState } from "./desired-state/index.js";
 import { publishComposedSchema } from "./composed-schema/index.js";
-import { ReconcileEngine, buildLoadStage, buildResolveStage, buildPlaceholderStage } from "./reconciler/index.js";
+import {
+  ReconcileEngine,
+  buildLoadStage,
+  buildResolveStage,
+  buildPlanStage,
+  buildPlaceholderStage,
+  buildRealPluginInvoker,
+} from "./reconciler/index.js";
 
 const log = createLogger("orchestrator");
 const paths = resolvePaths();
@@ -48,15 +55,23 @@ const nudgeState: NudgeState = { nudgedAt: null, count: 0 };
 
 const heartbeat = startHeartbeat(paths.statusDir, heartbeatState);
 
-// Reconcile engine (T3.4): level-triggered, single-flight, coalescing.
-// load/resolve are real (T3.1/T3.3); PLAN/VALIDATE/GATE/EXECUTE/OBSERVE are
-// placeholders until T3.5-T3.9 land, so the full pipeline shape is already
-// real and observable end to end.
+const pluginConnectionHolder: PluginConnectionHolder = {};
+const pluginInvoker = buildRealPluginInvoker({
+  store: stateStore,
+  auditLog,
+  pluginConnectionHolder,
+  bundlesDir: paths.bundlesDir,
+});
+
+// Reconcile engine (T3.4/T3.5): level-triggered, single-flight, coalescing.
+// load/resolve/plan are real (T3.1/T3.3/T3.5); VALIDATE/GATE/EXECUTE/OBSERVE
+// are placeholders until T3.6-T3.9 land, so the full pipeline shape is
+// already real and observable end to end.
 const reconcileEngine = new ReconcileEngine({
   stages: [
     buildLoadStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore }),
     buildResolveStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore }),
-    buildPlaceholderStage("plan"),
+    buildPlanStage({ invokePlugin: pluginInvoker }),
     buildPlaceholderStage("validate"),
     buildPlaceholderStage("gate"),
     buildPlaceholderStage("execute"),
@@ -95,8 +110,6 @@ const statusServer: Server = listenOnUnixSocket(
   0o660,
 );
 log.info("status socket listening", { path: paths.statusSocketPath });
-
-const pluginConnectionHolder: PluginConnectionHolder = {};
 
 const adminServer: Server = listenOnUnixSocket(
   buildAdminSocketRouter({
