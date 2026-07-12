@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "deploy-docker config (§5.4) -- mounted at spec.deploy in the composed schema",
+  "type": "object",
+  "properties": {
+    "plugin": { "const": "deploy-docker" },
+    "image": { "type": "string", "minLength": 1 },
+    "cmd": { "type": "array", "items": { "type": "string" } },
+    "entrypoint": { "type": "array", "items": { "type": "string" } },
+    "env": { "type": "object", "additionalProperties": { "type": "string" } },
+    "mounts": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": { "const": "volume" },
+              "name": { "type": "string", "minLength": 1 },
+              "target": { "type": "string", "minLength": 1 },
+              "readOnly": { "type": "boolean" }
+            },
+            "required": ["type", "name", "target"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "const": "bind" },
+              "source": { "type": "string", "minLength": 1 },
+              "target": { "type": "string", "minLength": 1 },
+              "readOnly": { "type": "boolean" }
+            },
+            "required": ["type", "source", "target"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "devices": { "type": "array", "items": { "type": "string" } },
+    "networkMode": { "type": "string" },
+    "ports": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 65535 } },
+    "capAdd": { "type": "array", "items": { "type": "string" } },
+    "privileged": { "type": "boolean" },
+    "securityOpt": { "type": "array", "items": { "type": "string" } },
+    "user": { "type": "string" },
+    "readOnly": { "type": "boolean" },
+    "resources": {
+      "type": "object",
+      "properties": { "memory": { "type": "string" }, "cpus": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+    "restart": { "type": "string" }
+  },
+  "required": ["plugin", "image"],
+  "additionalProperties": false
+}

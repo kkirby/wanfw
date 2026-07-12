@@ -178,6 +178,13 @@ importers:
         version: 2.1.9(@types/node@22.20.1)(sugarss@5.0.1(postcss@8.5.17))
 
   plugins/deploy-docker:
+    dependencies:
+      '@wanfw/core-schemas':
+        specifier: workspace:*
+        version: link:../../packages/core-schemas
+      '@wanfw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
     devDependencies:
       typescript:
         specifier: ^5.6.3
