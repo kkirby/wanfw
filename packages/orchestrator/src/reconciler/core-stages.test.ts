@@ -63,6 +63,43 @@ describe("core reconciler stages", () => {
     expect(rolesHolder.roles).toEqual({});
   });
 
+  it("load stage syncs the ipam macvlan range from framework.spec.network.macvlan on every load (T5.1)", async () => {
+    const desiredDir = await tempDir();
+    await mkdir(join(desiredDir, "services"), { recursive: true });
+    await writeFile(
+      join(desiredDir, "framework.json"),
+      JSON.stringify({
+        kind: "Framework",
+        schemaVersion: 1,
+        metadata: { id: "framework" },
+        spec: {
+          domain: "example.tld",
+          deploymentMode: "subdomain",
+          acmeEmail: "ops@example.tld",
+          roles: { networkProvider: "network-macvlan", proxyEngine: "proxy-caddy" },
+          network: { lanInterface: "eth0", macvlan: { parent: "eth0", reservedCidr: "192.168.1.240/29", gateway: "192.168.1.241" } },
+        },
+      }),
+    );
+    const dbDir = await tempDir();
+    const store = new StateStore(join(dbDir, "state.sqlite3"));
+    stores.push(store);
+    const stage = buildLoadStage({ desiredDir, bundlesDir: "", store });
+    await stage.run({});
+    expect(store.getIpamRange("macvlan")).toEqual({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.241" });
+  });
+
+  it("load stage leaves the ipam macvlan range untouched when no framework.spec.network.macvlan is configured", async () => {
+    const desiredDir = await tempDir();
+    await mkdir(join(desiredDir, "services"), { recursive: true });
+    const dbDir = await tempDir();
+    const store = new StateStore(join(dbDir, "state.sqlite3"));
+    stores.push(store);
+    const stage = buildLoadStage({ desiredDir, bundlesDir: "", store });
+    await stage.run({});
+    expect(store.getIpamRange("macvlan")).toBeUndefined();
+  });
+
   it("load stage fails with a structured error when a document is invalid", async () => {
     const desiredDir = await tempDir();
     await mkdir(join(desiredDir, "services"), { recursive: true });

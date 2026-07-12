@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { mkdirSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 import { runMigrations } from "./migrations.js";
+import { hostsInCidr } from "../ipam/cidr.js";
 
 export interface TrustRecordRow {
   plugin_id: string;
@@ -40,6 +41,21 @@ export interface JournalRow {
   result: string;
   ts: string;
 }
+
+export interface IpamRangeRow {
+  id: string;
+  cidr: string;
+  gateway: string;
+}
+
+export interface IpamAllocationRow {
+  ip: string;
+  range_id: string;
+  allocated_at: string;
+  released_at: string | null;
+}
+
+export class IpamExhaustedError extends Error {}
 
 export class StateStore {
   readonly db: Database.Database;
@@ -214,5 +230,74 @@ export class StateStore {
 
   listJournal(planId: string): JournalRow[] {
     return this.db.prepare("SELECT * FROM journal WHERE plan_id = ? ORDER BY id").all(planId) as JournalRow[];
+  }
+
+  // -- ipam (T5.1, ADR-1) -------------------------------------------------
+  /** Idempotent: called on every reconcile load from `framework.spec.network.macvlan` to keep the range in sync with the current desired state (a changed CIDR/gateway just updates the row in place -- existing allocations outside the new CIDR are left alone rather than force-released, since that's a network-provider-level decision, not this table's). */
+  setIpamRange(row: IpamRangeRow): void {
+    this.db
+      .prepare(
+        `INSERT INTO ipam_ranges (id, cidr, gateway) VALUES (@id, @cidr, @gateway)
+         ON CONFLICT(id) DO UPDATE SET cidr = excluded.cidr, gateway = excluded.gateway`,
+      )
+      .run(row);
+  }
+
+  getIpamRange(id: string): IpamRangeRow | undefined {
+    return this.db.prepare("SELECT * FROM ipam_ranges WHERE id = ?").get(id) as IpamRangeRow | undefined;
+  }
+
+  /**
+   * `ipam.allocate(rangeId)` (§6.6, ADR-1): the *first* host address in the
+   * range's CIDR (excluding network, broadcast, and the range's own
+   * gateway) that has no live allocation row -- a released IP is eligible
+   * for reuse immediately, but a currently-allocated one, or an address
+   * outside the current CIDR, never is. Runs inside a transaction so two
+   * concurrent allocate calls can never race onto the same IP (the
+   * PRIMARY KEY insert would fail the loser, but a transaction avoids ever
+   * attempting the collision in the first place -- fewer surprising error
+   * paths for a network-provider plugin driving this).
+   */
+  allocateIp(rangeId: string): string {
+    return this.db.transaction(() => {
+      const range = this.getIpamRange(rangeId);
+      if (!range) throw new Error(`no ipam range registered with id '${rangeId}'`);
+
+      const allocated = new Set(
+        (
+          this.db.prepare("SELECT ip FROM ipam_allocations WHERE range_id = ? AND released_at IS NULL").all(rangeId) as Array<{
+            ip: string;
+          }>
+        ).map((r) => r.ip),
+      );
+
+      const candidate = hostsInCidr(range.cidr, range.gateway).find((ip) => !allocated.has(ip));
+      if (!candidate) {
+        throw new IpamExhaustedError(`ipam range '${rangeId}' (${range.cidr}) has no free addresses`);
+      }
+
+      this.db
+        .prepare(
+          `INSERT INTO ipam_allocations (ip, range_id, allocated_at) VALUES (?, ?, ?)
+           ON CONFLICT(ip) DO UPDATE SET range_id = excluded.range_id, allocated_at = excluded.allocated_at, released_at = NULL`,
+        )
+        .run(candidate, rangeId, new Date().toISOString());
+
+      return candidate;
+    })();
+  }
+
+  /** `ipam.release(ip)`: soft-release (keeps the row, for audit, same discipline as trust/grant/approval revocation) -- releasing an address that was never allocated, or is already released, is a no-op, not an error (mirrors §9's general "cleanup is idempotent" discipline). */
+  releaseIp(ip: string): void {
+    this.db
+      .prepare("UPDATE ipam_allocations SET released_at = ? WHERE ip = ? AND released_at IS NULL")
+      .run(new Date().toISOString(), ip);
+  }
+
+  listIpamAllocations(rangeId: string, includeReleased = false): IpamAllocationRow[] {
+    const sql = includeReleased
+      ? "SELECT * FROM ipam_allocations WHERE range_id = ? ORDER BY ip"
+      : "SELECT * FROM ipam_allocations WHERE range_id = ? AND released_at IS NULL ORDER BY ip";
+    return this.db.prepare(sql).all(rangeId) as IpamAllocationRow[];
   }
 }

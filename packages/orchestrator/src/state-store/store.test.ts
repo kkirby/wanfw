@@ -2,7 +2,7 @@ import { describe, expect, it, afterEach } from "vitest";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { StateStore } from "./store.js";
+import { StateStore, IpamExhaustedError } from "./store.js";
 
 describe("StateStore", () => {
   const dirs: string[] = [];
@@ -175,5 +175,112 @@ describe("StateStore", () => {
     const plan1 = store.listJournal("plan1");
     expect(plan1.map((r) => r.step)).toEqual(["ensureNetwork", "ensureContainer"]);
     expect(store.listJournal("plan2")).toHaveLength(1);
+  });
+
+  describe("ipam (T5.1, ADR-1)", () => {
+    it("setIpamRange then getIpamRange round-trips, and re-setting the same id updates in place", () => {
+      const { store } = openTestStore();
+      store.setIpamRange({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.1" });
+      expect(store.getIpamRange("macvlan")).toEqual({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.1" });
+
+      store.setIpamRange({ id: "macvlan", cidr: "192.168.1.248/29", gateway: "192.168.1.1" });
+      expect(store.getIpamRange("macvlan")?.cidr).toBe("192.168.1.248/29");
+    });
+
+    it("getIpamRange returns undefined for an id that was never registered", () => {
+      const { store } = openTestStore();
+      expect(store.getIpamRange("never-registered")).toBeUndefined();
+    });
+
+    it("allocateIp throws for an unregistered range", () => {
+      const { store } = openTestStore();
+      expect(() => store.allocateIp("nope")).toThrow(/no ipam range registered/);
+    });
+
+    it("allocateIp hands out the first free host in the CIDR, excluding the gateway, in order", () => {
+      const { store } = openTestStore();
+      store.setIpamRange({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.241" });
+      expect(store.allocateIp("macvlan")).toBe("192.168.1.242");
+      expect(store.allocateIp("macvlan")).toBe("192.168.1.243");
+    });
+
+    it("exhaustion: allocating past every free address throws IpamExhaustedError", () => {
+      const { store } = openTestStore();
+      store.setIpamRange({ id: "tiny", cidr: "10.0.0.0/30", gateway: "10.0.0.1" }); // one usable host after excluding network/broadcast/gateway... actually /30 has 2 hosts, minus gateway = 1
+      store.allocateIp("tiny");
+      expect(() => store.allocateIp("tiny")).toThrow(IpamExhaustedError);
+      expect(() => store.allocateIp("tiny")).toThrow(/no free addresses/);
+    });
+
+    it("releaseIp frees the address for immediate reallocation", () => {
+      const { store } = openTestStore();
+      store.setIpamRange({ id: "tiny", cidr: "10.0.0.0/30", gateway: "10.0.0.1" });
+      const ip = store.allocateIp("tiny");
+      expect(() => store.allocateIp("tiny")).toThrow(IpamExhaustedError);
+
+      store.releaseIp(ip);
+      expect(store.allocateIp("tiny")).toBe(ip);
+    });
+
+    it("releaseIp on a never-allocated or already-released address is a silent no-op, not an error", () => {
+      const { store } = openTestStore();
+      expect(() => store.releaseIp("10.0.0.99")).not.toThrow();
+
+      store.setIpamRange({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.241" });
+      const ip = store.allocateIp("macvlan");
+      store.releaseIp(ip);
+      expect(() => store.releaseIp(ip)).not.toThrow(); // double-release
+    });
+
+    it("double-release does not corrupt allocation state -- the address is still available exactly once", () => {
+      const { store } = openTestStore();
+      store.setIpamRange({ id: "tiny", cidr: "10.0.0.0/30", gateway: "10.0.0.1" });
+      const ip = store.allocateIp("tiny");
+      store.releaseIp(ip);
+      store.releaseIp(ip);
+      expect(store.allocateIp("tiny")).toBe(ip);
+      expect(() => store.allocateIp("tiny")).toThrow(IpamExhaustedError);
+    });
+
+    it("allocations are scoped per range_id -- two ranges never collide or interfere", () => {
+      const { store } = openTestStore();
+      store.setIpamRange({ id: "range-a", cidr: "10.0.0.0/29", gateway: "10.0.0.1" });
+      store.setIpamRange({ id: "range-b", cidr: "10.0.1.0/29", gateway: "10.0.1.1" });
+      const a = store.allocateIp("range-a");
+      const b = store.allocateIp("range-b");
+      expect(a.startsWith("10.0.0.")).toBe(true);
+      expect(b.startsWith("10.0.1.")).toBe(true);
+      expect(store.listIpamAllocations("range-a")).toHaveLength(1);
+      expect(store.listIpamAllocations("range-b")).toHaveLength(1);
+    });
+
+    it("listIpamAllocations excludes released allocations unless includeReleased is set", () => {
+      const { store } = openTestStore();
+      store.setIpamRange({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.241" });
+      store.allocateIp("macvlan"); // stays live
+      const second = store.allocateIp("macvlan");
+      store.releaseIp(second); // released, but its row still exists
+
+      expect(store.listIpamAllocations("macvlan")).toHaveLength(1);
+      expect(store.listIpamAllocations("macvlan", true)).toHaveLength(2);
+    });
+
+    it("allocations survive a fresh StateStore instance against the same db file (restart)", () => {
+      const dir = mkdtempSync(join(tmpdir(), "wanfw-state-"));
+      dirs.push(dir);
+      const dbPath = join(dir, "state.sqlite3");
+      const first = new StateStore(dbPath);
+      first.setIpamRange({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.241" });
+      const ip = first.allocateIp("macvlan");
+      first.close();
+
+      const second = new StateStore(dbPath);
+      stores.push(second);
+      expect(second.getIpamRange("macvlan")?.cidr).toBe("192.168.1.240/29");
+      expect(second.listIpamAllocations("macvlan").map((r) => r.ip)).toEqual([ip]);
+      // the "restarted" allocation table is still authoritative -- the same address is still taken
+      const allocatedNow = new Set(second.listIpamAllocations("macvlan").map((r) => r.ip));
+      expect(allocatedNow.has(ip)).toBe(true);
+    });
   });
 });

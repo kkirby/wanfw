@@ -191,6 +191,7 @@ const hostApiDispatch = buildHostApiDispatcher({
   log,
   secretsDir: paths.secretsDir,
   certsDir: paths.certsDir,
+  bundlesDir: paths.bundlesDir,
   rolesHolder,
   pluginInvoker,
   onCertChange: () => void reconcileEngine.trigger("cert-store"),

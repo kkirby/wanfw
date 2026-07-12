@@ -26,6 +26,18 @@ export function buildLoadStage(deps: CoreStagesDeps): NamedStage {
         if (deps.rolesHolder) {
           deps.rolesHolder.roles = (desiredState.framework?.spec.roles as Record<string, string> | undefined) ?? {};
         }
+        // ipam range sync (T5.1, ADR-1): keeps `ipam_ranges` in `wanfw_state`
+        // matching `framework.spec.network.macvlan` on every load, so
+        // `network-macvlan`'s later `ipam.allocate("macvlan")` host-API
+        // call always has a range to allocate against without this stage
+        // (or any other) needing to thread the framework doc through to
+        // the dispatcher separately -- same "sync from desired state on
+        // load" shape as `rolesHolder` just above.
+        const macvlan = (desiredState.framework?.spec.network as { macvlan?: { reservedCidr?: string; gateway?: string } } | undefined)
+          ?.macvlan;
+        if (macvlan?.reservedCidr && macvlan.gateway) {
+          deps.store.setIpamRange({ id: "macvlan", cidr: macvlan.reservedCidr, gateway: macvlan.gateway });
+        }
         if (desiredState.errors.length > 0) {
           return {
             ok: false,

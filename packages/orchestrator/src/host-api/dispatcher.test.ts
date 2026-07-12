@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StateStore } from "../state-store/store.js";
@@ -25,16 +25,33 @@ describe("buildHostApiDispatcher", () => {
     dirs.push(secretsDir);
     const certsDir = mkdtempSync(join(tmpdir(), "wanfw-certs-"));
     dirs.push(certsDir);
+    const bundlesDir = mkdtempSync(join(tmpdir(), "wanfw-bundles-"));
+    dirs.push(bundlesDir);
     const store = new StateStore(join(dir, "state.sqlite3"));
     stores.push(store);
     const rolesHolder: FrameworkRolesHolder = { roles: options?.roles ?? {} };
     const pluginInvoker: PluginInvoker = options?.pluginInvoker ?? (async () => ({ ok: true, result: {} }));
-    const dispatch = buildHostApiDispatcher({ store, log: createLogger("test"), secretsDir, certsDir, rolesHolder, pluginInvoker });
-    return { dispatch, store, secretsDir, certsDir, rolesHolder };
+    const dispatch = buildHostApiDispatcher({ store, log: createLogger("test"), secretsDir, certsDir, bundlesDir, rolesHolder, pluginInvoker });
+    return { dispatch, store, secretsDir, certsDir, bundlesDir, rolesHolder };
   }
 
   function grant(store: StateStore, pluginId: string, cap: string, scope: Record<string, unknown>): void {
     store.insertGrant({ plugin_id: pluginId, cap, scope_json: JSON.stringify(scope), sig: "sig", created_at: new Date().toISOString() });
+  }
+
+  /** Trusts `pluginId` with a real manifest.json (declaring `types`) staged under `bundlesDir/<sha256>`, so `callingPluginTypes`'s structural check has something real to read -- mirrors how a real plugin's trust record + bundle actually relate. */
+  function trustAsType(store: StateStore, bundlesDir: string, pluginId: string, types: string[]): void {
+    const sha256 = `${pluginId}-sha`;
+    mkdirSync(join(bundlesDir, sha256), { recursive: true });
+    writeFileSync(join(bundlesDir, sha256, "manifest.json"), JSON.stringify({ id: pluginId, version: "0.1.0", types }));
+    store.insertTrustRecord({
+      plugin_id: pluginId,
+      version: "0.1.0",
+      sha256,
+      granted_caps_json: "[]",
+      sig: "sig",
+      created_at: new Date().toISOString(),
+    });
   }
 
   it("state.put then state.get round-trips within a plugin's own namespace", async () => {
@@ -332,6 +349,8 @@ describe("buildHostApiDispatcher", () => {
       dirs.push(secretsDir);
       const certsDir = mkdtempSync(join(tmpdir(), "wanfw-certs-"));
       dirs.push(certsDir);
+      const bundlesDir = mkdtempSync(join(tmpdir(), "wanfw-bundles-"));
+      dirs.push(bundlesDir);
       const store = new StateStore(join(dir, "state.sqlite3"));
       stores.push(store);
       grant(store, "cert-letsencrypt-dns01", "certs.store", {});
@@ -340,6 +359,7 @@ describe("buildHostApiDispatcher", () => {
         log: createLogger("test"),
         secretsDir,
         certsDir,
+        bundlesDir,
         rolesHolder: { roles: {} },
         pluginInvoker: async () => ({ ok: true, result: {} }),
         onCertChange: () => {
@@ -355,6 +375,57 @@ describe("buildHostApiDispatcher", () => {
       });
 
       expect(changed).toBe(true);
+    });
+  });
+
+  describe("ipam.allocate / ipam.release (T5.1)", () => {
+    it("a trusted network-provider plugin can allocate and release, structurally (no grant required)", async () => {
+      const { dispatch, store, bundlesDir } = freshDispatcher();
+      trustAsType(store, bundlesDir, "network-macvlan", ["network-provider"]);
+      store.setIpamRange({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.241" });
+
+      const res = await dispatch({ invocationId: "i1", pluginId: "network-macvlan", method: "ipam.allocate", args: { rangeId: "macvlan" } });
+      expect(res).toEqual({ ip: "192.168.1.242" });
+
+      const releaseRes = await dispatch({ invocationId: "i2", pluginId: "network-macvlan", method: "ipam.release", args: { ip: "192.168.1.242" } });
+      expect(releaseRes).toEqual({});
+      expect(store.listIpamAllocations("macvlan")).toHaveLength(0);
+    });
+
+    it("denies ipam.allocate for a plugin that isn't a trusted network-provider type", async () => {
+      const { dispatch, store, bundlesDir } = freshDispatcher();
+      trustAsType(store, bundlesDir, "dns-namecheap", ["dns-provider"]);
+      store.setIpamRange({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.241" });
+
+      await expect(
+        dispatch({ invocationId: "i1", pluginId: "dns-namecheap", method: "ipam.allocate", args: { rangeId: "macvlan" } }),
+      ).rejects.toThrow(CapabilityError);
+    });
+
+    it("denies ipam.allocate for a plugin that isn't trusted at all", async () => {
+      const { dispatch } = freshDispatcher();
+      await expect(
+        dispatch({ invocationId: "i1", pluginId: "not-trusted", method: "ipam.allocate", args: { rangeId: "macvlan" } }),
+      ).rejects.toThrow(CapabilityError);
+    });
+
+    it("denies ipam.release the same structural way", async () => {
+      const { dispatch, store, bundlesDir } = freshDispatcher();
+      trustAsType(store, bundlesDir, "dns-namecheap", ["dns-provider"]);
+      await expect(
+        dispatch({ invocationId: "i1", pluginId: "dns-namecheap", method: "ipam.release", args: { ip: "192.168.1.242" } }),
+      ).rejects.toThrow(CapabilityError);
+    });
+
+    it("surfaces exhaustion as a CapabilityError-shaped rejection, not an uncaught internal error", async () => {
+      const { dispatch, store, bundlesDir } = freshDispatcher();
+      trustAsType(store, bundlesDir, "network-macvlan", ["network-provider"]);
+      store.setIpamRange({ id: "tiny", cidr: "10.0.0.0/30", gateway: "10.0.0.1" });
+      await dispatch({ invocationId: "i1", pluginId: "network-macvlan", method: "ipam.allocate", args: { rangeId: "tiny" } });
+
+      await expect(
+        dispatch({ invocationId: "i2", pluginId: "network-macvlan", method: "ipam.allocate", args: { rangeId: "tiny" } }),
+      ).rejects.toThrow(/no free addresses/);
     });
   });
 });

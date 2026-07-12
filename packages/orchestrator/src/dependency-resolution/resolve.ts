@@ -34,7 +34,7 @@ export interface ResolutionResult {
   errors: DependencyError[];
 }
 
-async function readManifest(bundlesDir: string, sha256: string): Promise<ManifestLike | undefined> {
+export async function readManifest(bundlesDir: string, sha256: string): Promise<ManifestLike | undefined> {
   try {
     const raw = await readFile(join(bundlesDir, sha256, "manifest.json"), "utf8");
     return JSON.parse(raw) as ManifestLike;

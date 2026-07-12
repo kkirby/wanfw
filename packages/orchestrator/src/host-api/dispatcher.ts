@@ -1,8 +1,10 @@
 import type { StateStore } from "../state-store/store.js";
+import { IpamExhaustedError } from "../state-store/store.js";
 import type { Logger } from "../logger.js";
 import { hasGrant, matchNamePrefix, matchZone, type DecodedGrant } from "./scope-matcher.js";
 import { getSecret, putSecret } from "../secrets/store.js";
 import { storeCert } from "../certs/store.js";
+import { readManifest } from "../dependency-resolution/resolve.js";
 import type { FrameworkRolesHolder } from "../reconciler/core-stages.js";
 import type { PluginInvoker } from "../reconciler/plan-stage.js";
 
@@ -22,6 +24,8 @@ export interface HostApiDispatcherDeps {
   log: Logger;
   secretsDir: string;
   certsDir: string;
+  /** Where trusted bundles live, so `ipam.allocate/release` can read the calling plugin's own manifest to check it's a `network-provider` type (T5.1) -- "implicit for network-provider plugins" per the plan, a structural type check rather than a capability grant, mirroring `state.get/put`'s own no-grant-lookup baseline. */
+  bundlesDir: string;
   /** Framework role bindings (§5.3), read live so the T4.3 DNS broker can find the bound dnsProvider without threading desired state through this module. */
   rolesHolder: FrameworkRolesHolder;
   /** Reused from T3.5's PLAN stage wiring -- the broker invokes the bound dns-provider plugin's `dns.apply` task through the exact same real pluginhost connection. */
@@ -50,12 +54,25 @@ export interface HostApiDispatcherDeps {
  * process, since pluginhost -- unlike the orchestrator -- has real network
  * egress); this call is purely advisory, logging the plugin's own query
  * result for observability, never authoritative over anything.
+ * `ipam.allocate/release` (T5.1, ADR-1) are gated structurally like
+ * `state.*` -- "implicit for `network-provider` plugins" per the plan,
+ * checked by reading the calling plugin's own trusted manifest `types`
+ * rather than a capability grant, since address bookkeeping isn't a
+ * powerful/dangerous action in the same sense secrets or DNS writes are.
  */
 export function buildHostApiDispatcher(deps: HostApiDispatcherDeps): (params: unknown) => Promise<unknown> {
-  const { store, log, secretsDir, certsDir, rolesHolder, pluginInvoker } = deps;
+  const { store, log, secretsDir, certsDir, bundlesDir, rolesHolder, pluginInvoker } = deps;
 
   function decodedGrants(pluginId: string): DecodedGrant[] {
     return store.listGrants(pluginId).map((g) => ({ cap: g.cap, scope: JSON.parse(g.scope_json) as Record<string, unknown> }));
+  }
+
+  /** The most recently trusted (non-revoked) record for this plugin id's own declared manifest `types` -- `state.get/put`-style structural check, not a grant lookup. Undefined if the plugin isn't currently trusted at all (shouldn't happen for a live invocation, but not this function's job to assume). */
+  async function callingPluginTypes(pluginId: string): Promise<string[]> {
+    const trusted = store.listTrustRecords().filter((r) => r.plugin_id === pluginId);
+    if (trusted.length === 0) return [];
+    const manifest = await readManifest(bundlesDir, trusted[0]!.sha256);
+    return manifest?.types ?? [];
   }
 
   async function brokerDnsApply(
@@ -133,6 +150,31 @@ export function buildHostApiDispatcher(deps: HostApiDispatcherDeps): (params: un
       log.info("certificate stored", { component: "plugin", pluginId, name, generation });
       deps.onCertChange?.();
       return { generation };
+    },
+    "ipam.allocate": async (pluginId, args) => {
+      const { rangeId } = args as { rangeId: string };
+      const types = await callingPluginTypes(pluginId);
+      if (!types.includes("network-provider")) {
+        throw new CapabilityError(`ipam.allocate denied: ${pluginId} is not a trusted network-provider plugin`);
+      }
+      try {
+        const ip = store.allocateIp(rangeId);
+        log.info("ipam address allocated", { component: "plugin", pluginId, rangeId, ip });
+        return { ip };
+      } catch (err) {
+        if (err instanceof IpamExhaustedError) throw new CapabilityError(err.message);
+        throw err;
+      }
+    },
+    "ipam.release": async (pluginId, args) => {
+      const { ip } = args as { ip: string };
+      const types = await callingPluginTypes(pluginId);
+      if (!types.includes("network-provider")) {
+        throw new CapabilityError(`ipam.release denied: ${pluginId} is not a trusted network-provider plugin`);
+      }
+      store.releaseIp(ip);
+      log.info("ipam address released", { component: "plugin", pluginId, ip });
+      return {};
     },
   };
 
