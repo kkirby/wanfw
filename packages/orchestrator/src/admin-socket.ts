@@ -17,6 +17,7 @@ import { publishComposedSchema } from "./composed-schema/index.js";
 import { canonicalApprovalPayload } from "./signing-key.js";
 import type { GateSnapshotHolder } from "./reconciler/index.js";
 import { putSecret, unsetSecret, listSecrets } from "./secrets/store.js";
+import { listCerts, rollbackCert } from "./certs/store.js";
 
 /** Mutable holder so `key import`/`key rotate` can swap the live manager instance. */
 export interface SigningKeyHolder {
@@ -39,8 +40,10 @@ export interface AdminSocketDeps {
   bundlesDir: string;
   statusDir: string;
   secretsDir: string;
+  certsDir: string;
   gateSnapshotHolder: GateSnapshotHolder;
   onApprovalChange?: () => void;
+  onCertChange?: () => void;
 }
 
 /**
@@ -278,6 +281,26 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
     unsetSecret(deps.secretsDir, name);
     auditLog.append({ type: "secret.unset", details: { name } });
     return { status: 200, body: { name, unset: true } };
+  });
+
+  router.register("GET", "/certs", async () => ({
+    status: 200,
+    body: { certs: listCerts(deps.certsDir) },
+  }));
+
+  router.register("POST", "/certs/:name/rollback", async ({ params }) => {
+    const name = params.name;
+    if (!name) {
+      return { status: 400, body: { error: "usage", message: "name is required" } };
+    }
+    try {
+      const rolledBackTo = rollbackCert(deps.certsDir, name);
+      auditLog.append({ type: "cert.rollback", details: { name, rolledBackTo } });
+      deps.onCertChange?.();
+      return { status: 200, body: { name, rolledBackTo } };
+    } catch (err) {
+      return { status: 400, body: { error: "rollback-failed", message: (err as Error).message } };
+    }
   });
 
   return router;

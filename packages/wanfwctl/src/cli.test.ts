@@ -413,4 +413,40 @@ describe("wanfwctl-inner CLI", () => {
     expect(code).toBe(EXIT_CODES.ok);
     expect(unsetCalls()).toEqual([{ name: "cert-letsencrypt-dns01/acme-account-key" }]);
   });
+
+  async function bootCertRouter() {
+    const router = new JsonUdsRouter();
+    const rollbackCalls: string[] = [];
+    router.register("GET", "/certs", async () => ({
+      status: 200,
+      body: { certs: [{ name: "wildcard", currentGeneration: 2, generations: [1, 2] }] },
+    }));
+    router.register("POST", "/certs/:name/rollback", async ({ params }) => {
+      rollbackCalls.push(params.name!);
+      return { status: 200, body: { name: params.name!, rolledBackTo: 1 } };
+    });
+    const dir = await mkdtemp(join(tmpdir(), "wanfw-cli-cert-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "admin.sock");
+    servers.push(listenOnUnixSocket(router, socketPath));
+    await new Promise((r) => setTimeout(r, 50));
+    return { socketPath, rollbackCalls: () => rollbackCalls };
+  }
+
+  it("cert list: prints stored certs and their generations", async () => {
+    const { socketPath } = await bootCertRouter();
+    const out = captureOutput();
+    const code = await runCli(["cert", "list"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    const body = JSON.parse(out.lines.join(""));
+    expect(body.certs).toEqual([{ name: "wildcard", currentGeneration: 2, generations: [1, 2] }]);
+  });
+
+  it("cert rollback: calls the admin socket with the name", async () => {
+    const { socketPath, rollbackCalls } = await bootCertRouter();
+    const out = captureOutput();
+    const code = await runCli(["cert", "rollback", "wildcard"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(rollbackCalls()).toEqual(["wildcard"]);
+  });
 });

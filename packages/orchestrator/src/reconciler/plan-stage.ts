@@ -24,6 +24,11 @@ export interface CertRequirements {
   names: string[];
 }
 
+export interface CertPaths {
+  certPath: string;
+  keyPath: string;
+}
+
 export interface PlanGraph {
   networkPlan?: unknown;
   servicePlans: Record<string, unknown>;
@@ -34,7 +39,12 @@ export interface PlanGraph {
 
 export interface PlanStageDeps {
   invokePlugin: PluginInvoker;
+  /** Reads the current generation's cert/key paths for a stored cert name, or undefined if none has ever been stored (T4.5). Injected (rather than importing certs/store.js directly) so PLAN stays unit-testable without a real cert volume. */
+  lookupCertPaths?: (name: string) => CertPaths | undefined;
 }
+
+/** Convention (T4.5): every route is served from one framework-wide cert stored under this name -- cert-letsencrypt-dns01 issues a single SAN cert covering every exposed hostname, matching graph.certRequirements.names. */
+export const WILDCARD_CERT_NAME = "wildcard";
 
 function boundDeployPluginId(service: LoadedDocument): string | undefined {
   const deploy = service.spec.deploy as { plugin?: string } | undefined;
@@ -124,7 +134,8 @@ export function buildPlanStage(deps: PlanStageDeps): NamedStage {
 
       const proxyEngineId = roles.proxyEngine;
       if (proxyEngineId) {
-        const res = await deps.invokePlugin(proxyEngineId, "proxy.render", { routes: graph.routes });
+        const cert = deps.lookupCertPaths?.(WILDCARD_CERT_NAME);
+        const res = await deps.invokePlugin(proxyEngineId, "proxy.render", { routes: graph.routes, cert });
         if (!res.ok) {
           return {
             ok: false,

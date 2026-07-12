@@ -75,4 +75,25 @@ describe("proxy-caddy plugin (§8.4/§8.5)", () => {
       "
     `);
   });
+
+  it("switches every site and the catch-all to a static cert/key path once a stored cert is provided (T4.5)", () => {
+    const result = renderTask({
+      routes: [{ serviceId: "kavita", hostname: "kavita.example.tld", backendPort: 5000, backendProtocol: "http" }],
+      cert: { certPath: "/data/certs/wildcard/gen-3/fullchain.pem", keyPath: "/data/certs/wildcard/gen-3/key.pem" },
+    });
+
+    expect(result.content).toMatchInlineSnapshot(`
+      "kavita.example.tld {
+      	tls /data/certs/wildcard/gen-3/fullchain.pem /data/certs/wildcard/gen-3/key.pem
+      	reverse_proxy http://wanfw_kavita:5000
+      }
+
+      :443, :80 {
+      	tls /data/certs/wildcard/gen-3/fullchain.pem /data/certs/wildcard/gen-3/key.pem
+      	respond 404
+      }
+      "
+    `);
+    expect(result.content).not.toContain("tls internal");
+  });
 });

@@ -11,6 +11,7 @@ export interface OrchestratorPaths {
   bundlesDir: string;
   proxycfgDir: string;
   secretsDir: string;
+  certsDir: string;
   statusSocketDir: string;
   pluginSocketDir: string;
   adminSocketDir: string;
@@ -35,6 +36,7 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Orchestrator
     bundlesDir: `${dataRoot}/bundles`,
     proxycfgDir: `${dataRoot}/proxycfg`,
     secretsDir: `${dataRoot}/secrets`,
+    certsDir: `${dataRoot}/certs`,
     statusSocketDir,
     pluginSocketDir,
     adminSocketDir,

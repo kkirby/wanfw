@@ -162,4 +162,46 @@ describe("PLAN stage", () => {
     const graph = ctx.planGraph as { certRequirements: { mode: string; names: string[] } };
     expect(graph.certRequirements).toEqual({ mode: "internal-ca", names: ["jellyfin", "kavita"] });
   });
+
+  it("forwards the looked-up wildcard cert paths to proxy.render when lookupCertPaths finds one (T4.5)", async () => {
+    const desiredState: DesiredState = {
+      framework: frameworkDoc(),
+      services: new Map([["jellyfin", serviceDoc("jellyfin", "jellyfin", 8096)]]),
+      pluginConfigs: new Map(),
+      errors: [],
+    };
+    let renderArgs: unknown;
+    const invoker: PluginInvoker = async (pluginId, task, args) => {
+      if (task === "proxy.render") renderArgs = args;
+      return { ok: true, result: {} };
+    };
+    const stage = buildPlanStage({
+      invokePlugin: invoker,
+      lookupCertPaths: (name) => (name === "wildcard" ? { certPath: "/data/certs/wildcard/gen-1/fullchain.pem", keyPath: "/data/certs/wildcard/gen-1/key.pem" } : undefined),
+    });
+    await stage.run({ desiredState });
+
+    expect(renderArgs).toEqual({
+      routes: [{ serviceId: "jellyfin", hostname: "jellyfin", backendPort: 8096, backendProtocol: "http" }],
+      cert: { certPath: "/data/certs/wildcard/gen-1/fullchain.pem", keyPath: "/data/certs/wildcard/gen-1/key.pem" },
+    });
+  });
+
+  it("omits cert from proxy.render input when no lookupCertPaths is provided", async () => {
+    const desiredState: DesiredState = {
+      framework: frameworkDoc(),
+      services: new Map([["jellyfin", serviceDoc("jellyfin", "jellyfin", 8096)]]),
+      pluginConfigs: new Map(),
+      errors: [],
+    };
+    let renderArgs: unknown;
+    const invoker: PluginInvoker = async (pluginId, task, args) => {
+      if (task === "proxy.render") renderArgs = args;
+      return { ok: true, result: {} };
+    };
+    const stage = buildPlanStage({ invokePlugin: invoker });
+    await stage.run({ desiredState });
+
+    expect((renderArgs as { cert?: unknown }).cert).toBeUndefined();
+  });
 });

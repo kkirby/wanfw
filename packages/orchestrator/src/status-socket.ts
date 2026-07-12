@@ -7,6 +7,7 @@ import { listStagedBundles } from "./trust/index.js";
 import { validateDraftDocument, type ComposedSchema } from "./composed-schema/index.js";
 import type { GateSnapshotHolder } from "./reconciler/index.js";
 import { listSecrets } from "./secrets/store.js";
+import { listCerts } from "./certs/store.js";
 
 /**
  * Status socket (§2.2): read-only, pure validation, and a nudge. Zero
@@ -34,6 +35,7 @@ export const STATUS_SOCKET_ROUTE_ALLOWLIST: ReadonlyArray<{ method: string; path
   { method: "GET", path: "/plans" },
   { method: "GET", path: "/plans/:id" },
   { method: "GET", path: "/secrets" },
+  { method: "GET", path: "/certs" },
 ];
 
 export interface NudgeState {
@@ -56,6 +58,7 @@ export function buildStatusSocketRouter(
     stagingDir: string;
     statusDir?: string;
     secretsDir?: string;
+    certsDir?: string;
     gateSnapshotHolder?: GateSnapshotHolder;
     onNudge?: () => void;
   },
@@ -178,6 +181,12 @@ export function buildStatusSocketRouter(
   router.register("GET", "/secrets", async () => {
     if (!extra?.secretsDir) return { status: 200, body: { secrets: [] } };
     return { status: 200, body: { secrets: listSecrets(extra.secretsDir) } };
+  });
+
+  // Pure read of the same cert volume the admin socket's store/rollback routes write to.
+  router.register("GET", "/certs", async () => {
+    if (!extra?.certsDir) return { status: 200, body: { certs: [] } };
+    return { status: 200, body: { certs: listCerts(extra.certsDir) } };
   });
 
   return router;

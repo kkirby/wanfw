@@ -323,6 +323,26 @@ export function buildProgram(deps: CliDeps): Command {
       });
     });
 
+  const cert = program.command("cert").description("Certificate store (§6.6, §9, T4.5) -- generations, rollback");
+
+  cert
+    .command("list")
+    .description("List stored certs, their generations, and metadata")
+    .action(async () => {
+      await withAdminRequest(deps, "GET", "/certs", undefined, (body) => {
+        deps.stdout(JSON.stringify(body, null, 2));
+      });
+    });
+
+  cert
+    .command("rollback <name>")
+    .description("Roll back a cert to its previous generation")
+    .action(async (name: string) => {
+      await withAdminRequest(deps, "POST", `/certs/${encodeURIComponent(name)}/rollback`, undefined, (body) => {
+        deps.stdout(JSON.stringify(body, null, 2));
+      });
+    });
+
   return program;
 }
 

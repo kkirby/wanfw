@@ -28,6 +28,7 @@ import {
   type FrameworkRolesHolder,
 } from "./reconciler/index.js";
 import { buildRealDockerClient } from "./execute/index.js";
+import { currentCertPaths } from "./certs/store.js";
 
 const log = createLogger("orchestrator");
 const paths = resolvePaths();
@@ -35,7 +36,7 @@ const paths = resolvePaths();
 // Tolerate a missing framework document: this is pre-init state (T5.3 writes
 // the real framework doc later). Initialize data dirs so a fresh volume boots
 // cleanly.
-for (const dir of [paths.stateDir, paths.statusDir, paths.desiredDir, paths.stagingDir, paths.bundlesDir, paths.secretsDir]) {
+for (const dir of [paths.stateDir, paths.statusDir, paths.desiredDir, paths.stagingDir, paths.bundlesDir, paths.secretsDir, paths.certsDir]) {
   mkdirSync(dir, { recursive: true });
 }
 
@@ -80,7 +81,7 @@ const reconcileEngine = new ReconcileEngine({
   stages: [
     buildLoadStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore, rolesHolder }),
     buildResolveStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore }),
-    buildPlanStage({ invokePlugin: pluginInvoker }),
+    buildPlanStage({ invokePlugin: pluginInvoker, lookupCertPaths: (name) => currentCertPaths(paths.certsDir, name) }),
     buildValidateStage({ store: stateStore }),
     buildGateStage({ store: stateStore }, gateSnapshotHolder),
     buildExecuteStage({ store: stateStore, docker: dockerClient, proxycfgDir: paths.proxycfgDir }),
@@ -114,6 +115,7 @@ const statusServer: Server = listenOnUnixSocket(
     stagingDir: paths.stagingDir,
     statusDir: paths.statusDir,
     secretsDir: paths.secretsDir,
+    certsDir: paths.certsDir,
     gateSnapshotHolder,
     onNudge: () => void reconcileEngine.trigger("nudge"),
   }),
@@ -133,15 +135,25 @@ const adminServer: Server = listenOnUnixSocket(
     bundlesDir: paths.bundlesDir,
     statusDir: paths.statusDir,
     secretsDir: paths.secretsDir,
+    certsDir: paths.certsDir,
     gateSnapshotHolder,
     onApprovalChange: () => void reconcileEngine.trigger("plan-approve"),
+    onCertChange: () => void reconcileEngine.trigger("cert-rollback"),
   }),
   paths.adminSocketPath,
   0o600,
 );
 log.info("admin socket listening", { path: paths.adminSocketPath });
 
-const hostApiDispatch = buildHostApiDispatcher({ store: stateStore, log, secretsDir: paths.secretsDir, rolesHolder, pluginInvoker });
+const hostApiDispatch = buildHostApiDispatcher({
+  store: stateStore,
+  log,
+  secretsDir: paths.secretsDir,
+  certsDir: paths.certsDir,
+  rolesHolder,
+  pluginInvoker,
+  onCertChange: () => void reconcileEngine.trigger("cert-store"),
+});
 const pluginServer = listenPluginSocket(
   paths.pluginSocketPath,
   log,

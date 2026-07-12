@@ -7,6 +7,7 @@ import { createLogger } from "../logger.js";
 import { buildHostApiDispatcher, CapabilityError } from "./dispatcher.js";
 import type { FrameworkRolesHolder } from "../reconciler/core-stages.js";
 import type { PluginInvoker, PluginInvokeResult } from "../reconciler/plan-stage.js";
+import { currentCertPaths } from "../certs/store.js";
 
 describe("buildHostApiDispatcher", () => {
   const dirs: string[] = [];
@@ -22,12 +23,14 @@ describe("buildHostApiDispatcher", () => {
     dirs.push(dir);
     const secretsDir = mkdtempSync(join(tmpdir(), "wanfw-secrets-"));
     dirs.push(secretsDir);
+    const certsDir = mkdtempSync(join(tmpdir(), "wanfw-certs-"));
+    dirs.push(certsDir);
     const store = new StateStore(join(dir, "state.sqlite3"));
     stores.push(store);
     const rolesHolder: FrameworkRolesHolder = { roles: options?.roles ?? {} };
     const pluginInvoker: PluginInvoker = options?.pluginInvoker ?? (async () => ({ ok: true, result: {} }));
-    const dispatch = buildHostApiDispatcher({ store, log: createLogger("test"), secretsDir, rolesHolder, pluginInvoker });
-    return { dispatch, store, secretsDir, rolesHolder };
+    const dispatch = buildHostApiDispatcher({ store, log: createLogger("test"), secretsDir, certsDir, rolesHolder, pluginInvoker });
+    return { dispatch, store, secretsDir, certsDir, rolesHolder };
   }
 
   function grant(store: StateStore, pluginId: string, cap: string, scope: Record<string, unknown>): void {
@@ -290,6 +293,68 @@ describe("buildHostApiDispatcher", () => {
       });
       expect(res).toEqual({});
       expect(invoked).toBe(false);
+    });
+  });
+
+  describe("certs.store (T4.5)", () => {
+    it("a granted plugin's certs.store call writes the cert and returns the new generation", async () => {
+      const { dispatch, store, certsDir } = freshDispatcher();
+      grant(store, "cert-letsencrypt-dns01", "certs.store", {});
+
+      const res = await dispatch({
+        invocationId: "i1",
+        pluginId: "cert-letsencrypt-dns01",
+        method: "certs.store",
+        args: { name: "wildcard", certPem: "CERT", keyPem: "KEY", meta: { names: ["example.tld"] } },
+      });
+
+      expect(res).toEqual({ generation: 1 });
+      expect(currentCertPaths(certsDir, "wildcard")).toBeDefined();
+    });
+
+    it("denies a plugin with no certs.store grant", async () => {
+      const { dispatch } = freshDispatcher();
+      await expect(
+        dispatch({
+          invocationId: "i1",
+          pluginId: "cert-letsencrypt-dns01",
+          method: "certs.store",
+          args: { name: "wildcard", certPem: "CERT", keyPem: "KEY" },
+        }),
+      ).rejects.toThrow(CapabilityError);
+    });
+
+    it("calls onCertChange after a successful store, to trigger an immediate reconcile", async () => {
+      let changed = false;
+      const dir = mkdtempSync(join(tmpdir(), "wanfw-hostapi-"));
+      dirs.push(dir);
+      const secretsDir = mkdtempSync(join(tmpdir(), "wanfw-secrets-"));
+      dirs.push(secretsDir);
+      const certsDir = mkdtempSync(join(tmpdir(), "wanfw-certs-"));
+      dirs.push(certsDir);
+      const store = new StateStore(join(dir, "state.sqlite3"));
+      stores.push(store);
+      grant(store, "cert-letsencrypt-dns01", "certs.store", {});
+      const dispatch = buildHostApiDispatcher({
+        store,
+        log: createLogger("test"),
+        secretsDir,
+        certsDir,
+        rolesHolder: { roles: {} },
+        pluginInvoker: async () => ({ ok: true, result: {} }),
+        onCertChange: () => {
+          changed = true;
+        },
+      });
+
+      await dispatch({
+        invocationId: "i1",
+        pluginId: "cert-letsencrypt-dns01",
+        method: "certs.store",
+        args: { name: "wildcard", certPem: "CERT", keyPem: "KEY" },
+      });
+
+      expect(changed).toBe(true);
     });
   });
 });

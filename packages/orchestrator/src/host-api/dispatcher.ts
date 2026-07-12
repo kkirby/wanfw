@@ -2,6 +2,7 @@ import type { StateStore } from "../state-store/store.js";
 import type { Logger } from "../logger.js";
 import { hasGrant, matchNamePrefix, matchZone, type DecodedGrant } from "./scope-matcher.js";
 import { getSecret, putSecret } from "../secrets/store.js";
+import { storeCert } from "../certs/store.js";
 import type { FrameworkRolesHolder } from "../reconciler/core-stages.js";
 import type { PluginInvoker } from "../reconciler/plan-stage.js";
 
@@ -20,10 +21,13 @@ export interface HostApiDispatcherDeps {
   store: StateStore;
   log: Logger;
   secretsDir: string;
+  certsDir: string;
   /** Framework role bindings (§5.3), read live so the T4.3 DNS broker can find the bound dnsProvider without threading desired state through this module. */
   rolesHolder: FrameworkRolesHolder;
   /** Reused from T3.5's PLAN stage wiring -- the broker invokes the bound dns-provider plugin's `dns.apply` task through the exact same real pluginhost connection. */
   pluginInvoker: PluginInvoker;
+  /** Triggers a reconcile after a cert is stored/rolled back, so EXECUTE's proxy reload picks up the new cert on the next pass (T4.5) -- same "mutation -> immediate re-trigger" pattern as T3.7's onApprovalChange. */
+  onCertChange?: () => void;
 }
 
 /**
@@ -48,7 +52,7 @@ export interface HostApiDispatcherDeps {
  * result for observability, never authoritative over anything.
  */
 export function buildHostApiDispatcher(deps: HostApiDispatcherDeps): (params: unknown) => Promise<unknown> {
-  const { store, log, secretsDir, rolesHolder, pluginInvoker } = deps;
+  const { store, log, secretsDir, certsDir, rolesHolder, pluginInvoker } = deps;
 
   function decodedGrants(pluginId: string): DecodedGrant[] {
     return store.listGrants(pluginId).map((g) => ({ cap: g.cap, scope: JSON.parse(g.scope_json) as Record<string, unknown> }));
@@ -118,6 +122,17 @@ export function buildHostApiDispatcher(deps: HostApiDispatcherDeps): (params: un
       const { name, type, result } = args as { name: string; type: string; result: unknown };
       log.info(`dns.query (advisory, plugin-resolved): ${name} ${type}`, { component: "plugin", pluginId, result });
       return {};
+    },
+    "certs.store": async (pluginId, args) => {
+      const { name, certPem, keyPem, meta } = args as { name: string; certPem: string; keyPem: string; meta?: Record<string, unknown> };
+      const grants = decodedGrants(pluginId);
+      if (!hasGrant(grants, "certs.store", () => true)) {
+        throw new CapabilityError(`certs.store denied: ${pluginId} has no certs.store grant`);
+      }
+      const generation = storeCert(certsDir, name, certPem, keyPem, meta ?? {});
+      log.info("certificate stored", { component: "plugin", pluginId, name, generation });
+      deps.onCertChange?.();
+      return { generation };
     },
   };
 
