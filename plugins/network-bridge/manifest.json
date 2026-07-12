@@ -1,0 +1,12 @@
+{
+  "manifestVersion": 1,
+  "id": "network-bridge",
+  "version": "0.1.0",
+  "frameworkApi": "^1.0.0",
+  "types": ["network-provider"],
+  "entrypoint": "main.js",
+  "runtime": "node22",
+  "capabilities": [
+    { "cap": "docker.ports.publish", "scope": { "ports": [80, 443] }, "reason": "publish the shared proxy's 80/443 on the host (ADR-1 default provider)", "enforcement": "enforced" }
+  ]
+}
