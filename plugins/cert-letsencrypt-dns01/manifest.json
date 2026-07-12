@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "id": "cert-letsencrypt-dns01",
+  "version": "0.1.0",
+  "frameworkApi": "^1.0.0",
+  "types": ["cert-issuer"],
+  "entrypoint": "main.js",
+  "runtime": "node22",
+  "capabilities": [
+    { "cap": "secrets.read", "scope": { "names": ["cert-letsencrypt-dns01/*"] }, "reason": "read its own persisted ACME account key", "enforcement": "enforced" },
+    { "cap": "secrets.write", "scope": { "names": ["cert-letsencrypt-dns01/*"] }, "reason": "persist the ACME account key on first run (§9)", "enforcement": "enforced" },
+    { "cap": "dns.record.write", "scope": { "zones": ["*"] }, "reason": "publish and clean up the _acme-challenge TXT record for DNS-01 validation", "enforcement": "enforced" },
+    { "cap": "certs.store", "scope": {}, "reason": "store the issued certificate + key once validated (T4.5)", "enforcement": "enforced" }
+  ]
+}

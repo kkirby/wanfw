@@ -79,6 +79,11 @@ describe("matchZone", () => {
     expect(matchZone(["example.tld"], "example.tld")).toBe(true);
     expect(matchZone(["example.tld"], "other.tld")).toBe(false);
   });
+
+  it("a '*' grant matches any zone (T4.4's cert-issuer manifest, written before any operator's domain is known)", () => {
+    expect(matchZone(["*"], "example.tld")).toBe(true);
+    expect(matchZone(["*"], "literally-anything.tld")).toBe(true);
+  });
 });
 
 describe("matchPort / matchPortRange", () => {

@@ -49,8 +49,9 @@ export function matchNamePrefix(patterns: string[], name: string): boolean {
   });
 }
 
+/** Exact match, or "*" for any zone -- same wildcard convention as matchNamePrefix, needed since a cert-issuer's manifest is written before any operator's actual domain is known (T4.4). */
 export function matchZone(zones: string[], zone: string): boolean {
-  return zones.includes(zone);
+  return zones.includes("*") || zones.includes(zone);
 }
 
 /**
