@@ -18,6 +18,7 @@ import { canonicalApprovalPayload } from "./signing-key.js";
 import type { GateSnapshotHolder } from "./reconciler/index.js";
 import { putSecret, unsetSecret, listSecrets } from "./secrets/store.js";
 import { listCerts, rollbackCert } from "./certs/store.js";
+import { validateEnvelope } from "./desired-state/index.js";
 
 /** Mutable holder so `key import`/`key rotate` can swap the live manager instance. */
 export interface SigningKeyHolder {
@@ -44,6 +45,8 @@ export interface AdminSocketDeps {
   gateSnapshotHolder: GateSnapshotHolder;
   onApprovalChange?: () => void;
   onCertChange?: () => void;
+  /** Triggers a reconcile after the framework doc changes (T5.3, docs/t5.3-decisions.md) -- same pattern as onApprovalChange/onCertChange. */
+  onFrameworkChange?: () => void;
 }
 
 /**
@@ -136,19 +139,26 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
     }
   });
 
-  router.register("POST", "/plugins/trust-builtins", async () => {
+  router.register("POST", "/plugins/trust-builtins", async ({ body }) => {
     const connection = deps.pluginConnectionHolder.connection;
     if (!connection) {
       return { status: 502, body: { error: "pluginhost_unreachable", message: "no active pluginhost connection" } };
     }
+    // Optional `ids` filter (T5.3): the pluginhost image ships test-only
+    // builtins alongside production ones (e.g. dns-mock, T4.7's Pebble
+    // harness) -- `wanfwctl init` must never trust those on a real
+    // deployment. Omitted (the pre-T5.3 behavior, still used by
+    // `--builtin-all` for dev/test) trusts every builtin the image ships.
+    const { ids } = (body ?? {}) as { ids?: string[] };
     const builtins = (await connection.call("builtins.list")) as Array<{
       id: string;
       version: string;
       manifest: unknown;
       sha256: string;
     }>;
+    const filtered = ids ? builtins.filter((b) => ids.includes(b.id)) : builtins;
     const results = [];
-    for (const builtin of builtins) {
+    for (const builtin of filtered) {
       const read = (await connection.call("builtins.read", { id: builtin.id })) as {
         files: Array<{ relPath: string; contentBase64: string }>;
       };
@@ -163,6 +173,25 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
     }
     await publishComposedSchema(store, deps.bundlesDir, deps.statusDir);
     return { status: 200, body: { trusted: results } };
+  });
+
+  // WAN IP detection (T5.3, §11 init): the pluginhost's `helper.wanIp` RPC
+  // (a real outbound HTTP call) is the only real network egress in this
+  // whole system (the orchestrator itself has none, §12.5) -- exposed here
+  // purely so `wanfwctl init` can print the real detected WAN IP alongside
+  // the DNS-record instructions, never used by the reconcile pipeline
+  // itself.
+  router.register("GET", "/network/wan-ip", async () => {
+    const connection = deps.pluginConnectionHolder.connection;
+    if (!connection) {
+      return { status: 502, body: { error: "pluginhost_unreachable", message: "no active pluginhost connection" } };
+    }
+    try {
+      const result = (await connection.call("helper.wanIp")) as { ip?: string };
+      return { status: 200, body: { ip: result.ip ?? null } };
+    } catch (err) {
+      return { status: 502, body: { error: "wan_ip_detect_failed", message: (err as Error).message } };
+    }
   });
 
   router.register("POST", "/plugins/untrust", async ({ body }) => {
@@ -301,6 +330,32 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
     } catch (err) {
       return { status: 400, body: { error: "rollback-failed", message: (err as Error).message } };
     }
+  });
+
+  // -- framework document (T5.3, docs/t5.3-decisions.md) -------------------
+  // The framework doc lives in wanfw_state, authored only here -- never
+  // wanfw_desired, which tier1 (not admin.sock) writes and the orchestrator
+  // only ever reads (§12.5's tier1/orchestrator trust split). Validated at
+  // write time with the exact same validators/migrations the file loader
+  // would run, so a bad doc is rejected here with a clear message instead
+  // of surfacing later as a reconcile-stage failure.
+  router.register("GET", "/framework", async () => ({
+    status: 200,
+    body: { framework: store.getFrameworkDoc() ?? null },
+  }));
+
+  router.register("POST", "/framework", async ({ body }) => {
+    if (body === undefined || body === null) {
+      return { status: 400, body: { error: "usage", message: "a framework document body is required" } };
+    }
+    const { error } = validateEnvelope(body, "admin-socket:/framework");
+    if (error) {
+      return { status: 400, body: { error: "invalid", message: error.message } };
+    }
+    store.setFrameworkDoc(body);
+    auditLog.append({ type: "framework.set", details: {} });
+    deps.onFrameworkChange?.();
+    return { status: 200, body: { set: true } };
   });
 
   return router;

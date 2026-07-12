@@ -232,6 +232,17 @@ export class StateStore {
     return this.db.prepare("SELECT * FROM journal WHERE plan_id = ? ORDER BY id").all(planId) as JournalRow[];
   }
 
+  // -- framework doc (T5.3, docs/t5.3-decisions.md) ------------------------
+  /** The framework document's raw (already-validated) envelope, or undefined pre-init. Lives here, not `wanfw_desired`, since the admin socket -- not tier1 -- is the only legitimate author (§12.5's own tier1/orchestrator trust split). */
+  getFrameworkDoc(): unknown | undefined {
+    const raw = this.getMeta("framework_doc");
+    return raw === undefined ? undefined : (JSON.parse(raw) as unknown);
+  }
+
+  setFrameworkDoc(raw: unknown): void {
+    this.setMeta("framework_doc", JSON.stringify(raw));
+  }
+
   // -- ipam (T5.1, ADR-1) -------------------------------------------------
   /** Idempotent: called on every reconcile load from `framework.spec.network.macvlan` to keep the range in sync with the current desired state (a changed CIDR/gateway just updates the row in place -- existing allocations outside the new CIDR are left alone rather than force-released, since that's a network-provider-level decision, not this table's). */
   setIpamRange(row: IpamRangeRow): void {

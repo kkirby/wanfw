@@ -449,4 +449,49 @@ describe("wanfwctl-inner CLI", () => {
     expect(code).toBe(EXIT_CODES.ok);
     expect(rollbackCalls()).toEqual(["wildcard"]);
   });
+
+  async function bootFrameworkRouter() {
+    const router = new JsonUdsRouter();
+    const setCalls: unknown[] = [];
+    router.register("GET", "/framework", async () => ({ status: 200, body: { framework: null } }));
+    router.register("POST", "/framework", async ({ body }) => {
+      setCalls.push(body);
+      return { status: 200, body: { set: true } };
+    });
+    const dir = await mkdtemp(join(tmpdir(), "wanfw-cli-framework-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "admin.sock");
+    servers.push(listenOnUnixSocket(router, socketPath));
+    await new Promise((r) => setTimeout(r, 50));
+    return { socketPath, setCalls: () => setCalls };
+  }
+
+  it("framework show: prints the admin socket's response", async () => {
+    const { socketPath } = await bootFrameworkRouter();
+    const out = captureOutput();
+    const code = await runCli(["framework", "show"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(JSON.parse(out.lines.join(""))).toEqual({ framework: null });
+  });
+
+  it("framework set: reads JSON from stdin and forwards it to the admin socket", async () => {
+    const { socketPath, setCalls } = await bootFrameworkRouter();
+    const out = captureOutput();
+    const doc = { schemaVersion: 1, kind: "Framework", metadata: { id: "framework" }, spec: { domain: "example.tld" } };
+    const code = await runCli(["framework", "set"], {
+      adminSocketPath: socketPath,
+      ...out,
+      readStdin: async () => JSON.stringify(doc),
+    });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(setCalls()).toEqual([doc]);
+  });
+
+  it("framework set: invalid JSON on stdin is a usage error, never reaches the admin socket", async () => {
+    const { socketPath, setCalls } = await bootFrameworkRouter();
+    const out = captureOutput();
+    const code = await runCli(["framework", "set"], { adminSocketPath: socketPath, ...out, readStdin: async () => "not json" });
+    expect(code).toBe(EXIT_CODES.usage);
+    expect(setCalls()).toHaveLength(0);
+  });
 });

@@ -1,12 +1,47 @@
 import { Command } from "commander";
 import { adminRequest, AdminSocketUnreachableError } from "./admin-client.js";
 import { EXIT_CODES } from "./exit-codes.js";
+import { runInit } from "./init.js";
 
 export interface CliDeps {
   adminSocketPath: string;
   stdout: (line: string) => void;
   stderr: (line: string) => void;
   readStdin?: () => Promise<string>;
+  /** Prompts the operator interactively; defaults to a real readline over stdin/stdout (no TTY over `docker exec -i`, so answers are never masked). Injectable for tests. */
+  prompt?: (question: string) => Promise<string>;
+}
+
+async function readAllStdinForCli(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// Reads the *entire* stdin up front and answers each prompt() call by
+// shifting one line off the result, rather than an interactive
+// line-by-line readline loop. `docker exec -i` (the only way `wanfwctl`
+// ever runs, deploy/wanfwctl) never provides a real TTY, and Node's
+// readline has a well-documented gotcha over piped input: 'line' events
+// fire as soon as data arrives regardless of whether a `.question()` call
+// is actively awaiting one, so lines that arrive between two `.question()`
+// calls (which is *every* line, since piped input all arrives in one
+// burst) can be delivered to the wrong call or dropped. Reading eagerly
+// and consuming a queue sidesteps that class of bug entirely -- this
+// process is a one-shot CLI invocation, not a REPL, so "no streaming"
+// costs nothing.
+let stdinLineQueue: string[] | undefined;
+async function defaultPrompt(question: string): Promise<string> {
+  if (stdinLineQueue === undefined) {
+    const raw = await readAllStdinForCli();
+    stdinLineQueue = raw.split("\n");
+  }
+  const line = (stdinLineQueue.shift() ?? "").replace(/\r$/, "");
+  process.stdout.write(question);
+  process.stdout.write(`${line}\n`); // no TTY to echo it for us
+  return line;
 }
 
 async function readAllStdin(): Promise<string> {
@@ -340,6 +375,49 @@ export function buildProgram(deps: CliDeps): Command {
     .action(async (name: string) => {
       await withAdminRequest(deps, "POST", `/certs/${encodeURIComponent(name)}/rollback`, undefined, (body) => {
         deps.stdout(JSON.stringify(body, null, 2));
+      });
+    });
+
+  const framework = program
+    .command("framework")
+    .description("Framework document (T5.3) -- lives in wanfw_state, authored only here, never in wanfw_desired");
+
+  framework
+    .command("show")
+    .description("Show the current framework document, or null if none has ever been set")
+    .action(async () => {
+      await withAdminRequest(deps, "GET", "/framework", undefined, (body) => {
+        deps.stdout(JSON.stringify(body, null, 2));
+      });
+    });
+
+  framework
+    .command("set")
+    .description("Set the framework document, read as JSON from stdin (e.g. `wanfwctl framework set < framework.json`)")
+    .action(async () => {
+      const raw = await (deps.readStdin ?? readAllStdin)();
+      let doc: unknown;
+      try {
+        doc = JSON.parse(raw);
+      } catch {
+        deps.stderr("error: stdin is not valid JSON");
+        process.exitCode = EXIT_CODES.usage;
+        return;
+      }
+      await withAdminRequest(deps, "POST", "/framework", doc, () => {
+        deps.stdout("framework document set");
+      });
+    });
+
+  program
+    .command("init")
+    .description("Interactive first-run setup wizard (T5.3): domain, DNS credentials, network provider, framework doc, tier1 setup token")
+    .action(async () => {
+      process.exitCode = await runInit({
+        adminSocketPath: deps.adminSocketPath,
+        stdout: deps.stdout,
+        stderr: deps.stderr,
+        prompt: deps.prompt ?? defaultPrompt,
       });
     });
 

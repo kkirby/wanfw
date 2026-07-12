@@ -1,7 +1,10 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { StateStore } from "../state-store/store.js";
 import { loadDesiredState, type DesiredState } from "../desired-state/index.js";
 import { resolveDependencies, type FrameworkSpec } from "../dependency-resolution/index.js";
 import type { NamedStage, ReconcileRunContext, StageResult } from "./types.js";
+import type { Logger } from "../logger.js";
 
 /** Mutable holder for the framework doc's current role bindings (§5.3), read live by the T4.3 DNS broker to find the bound dnsProvider without threading desired state through the host API dispatcher. */
 export interface FrameworkRolesHolder {
@@ -13,15 +16,30 @@ export interface CoreStagesDeps {
   bundlesDir: string;
   store: StateStore;
   rolesHolder?: FrameworkRolesHolder;
+  log?: Logger;
 }
 
-/** load + migrate (§7): loadDesiredState already runs the migration chain in memory (T3.1). */
+/**
+ * load + migrate (§7): loadDesiredState already runs the migration chain in
+ * memory (T3.1). The framework document comes from `StateStore.getFrameworkDoc`
+ * (T5.3, `docs/t5.3-decisions.md`), not `wanfw_desired/framework.json` --
+ * a leftover file there from before the T5.3 cutover is never read, only
+ * warned about once, so an operator upgrading mid-flight notices instead of
+ * silently wondering why editing it does nothing.
+ */
 export function buildLoadStage(deps: CoreStagesDeps): NamedStage {
+  let warnedStaleFrameworkFile = false;
   return {
     name: "load",
     run: async (ctx: ReconcileRunContext): Promise<StageResult> => {
       try {
-        const desiredState = await loadDesiredState(deps.desiredDir);
+        if (!warnedStaleFrameworkFile && existsSync(join(deps.desiredDir, "framework.json"))) {
+          warnedStaleFrameworkFile = true;
+          deps.log?.warn(
+            "wanfw_desired/framework.json exists but is ignored -- the framework document now lives in wanfw_state, authored via 'wanfwctl framework set' (T5.3)",
+          );
+        }
+        const desiredState = await loadDesiredState(deps.desiredDir, deps.store?.getFrameworkDoc());
         ctx.desiredState = desiredState;
         if (deps.rolesHolder) {
           deps.rolesHolder.roles = (desiredState.framework?.spec.roles as Record<string, string> | undefined) ?? {};

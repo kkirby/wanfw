@@ -36,6 +36,7 @@ export const STATUS_SOCKET_ROUTE_ALLOWLIST: ReadonlyArray<{ method: string; path
   { method: "GET", path: "/plans/:id" },
   { method: "GET", path: "/secrets" },
   { method: "GET", path: "/certs" },
+  { method: "GET", path: "/framework" },
 ];
 
 export interface NudgeState {
@@ -187,6 +188,15 @@ export function buildStatusSocketRouter(
   router.register("GET", "/certs", async () => {
     if (!extra?.certsDir) return { status: 200, body: { certs: [] } };
     return { status: 200, body: { certs: listCerts(extra.certsDir) } };
+  });
+
+  // Read-only mirror of the admin socket's framework doc (T5.3,
+  // docs/t5.3-decisions.md) -- tier1's setup page and dashboard need to
+  // read it (operator instructions, domain, roles), but tier1 has no path
+  // to admin.sock and must never be able to author it.
+  router.register("GET", "/framework", async () => {
+    if (!extra) return { status: 200, body: { framework: null } };
+    return { status: 200, body: { framework: extra.store.getFrameworkDoc() ?? null } };
   });
 
   return router;

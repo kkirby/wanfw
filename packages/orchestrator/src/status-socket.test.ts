@@ -250,4 +250,20 @@ describe("status socket handlers (live HTTP over a real Unix socket)", () => {
     expect(secrets[0]!.name).toBe("cert-letsencrypt-dns01/acme-account-key");
     expect(JSON.stringify(res.body)).not.toContain("the-actual-secret-value");
   });
+
+  it("GET /framework mirrors the admin socket's framework doc, null before anything is set (T5.3)", async () => {
+    const { socketPath, store } = await boot();
+    const before = await requestOverSocket(socketPath, "GET", "/framework");
+    expect(before.body).toEqual({ framework: null });
+
+    const doc = {
+      schemaVersion: 1,
+      kind: "Framework",
+      metadata: { id: "framework" },
+      spec: { domain: "example.tld", deploymentMode: "subdomain", acmeEmail: "ops@example.tld", roles: {} },
+    };
+    store.setFrameworkDoc(doc);
+    const after = await requestOverSocket(socketPath, "GET", "/framework");
+    expect(after.body).toEqual({ framework: doc });
+  });
 });

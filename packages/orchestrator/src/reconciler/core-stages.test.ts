@@ -34,22 +34,22 @@ describe("core reconciler stages", () => {
   it("load stage updates the roles holder with the framework doc's current role bindings, read live by T4.3's DNS broker", async () => {
     const desiredDir = await tempDir();
     await mkdir(join(desiredDir, "services"), { recursive: true });
-    await writeFile(
-      join(desiredDir, "framework.json"),
-      JSON.stringify({
-        kind: "Framework",
-        schemaVersion: 1,
-        metadata: { id: "framework" },
-        spec: {
-          domain: "example.tld",
-          deploymentMode: "subdomain",
-          acmeEmail: "ops@example.tld",
-          roles: { networkProvider: "network-bridge", proxyEngine: "proxy-caddy", dnsProvider: "dns-namecheap" },
-        },
-      }),
-    );
+    const dbDir = await tempDir();
+    const store = new StateStore(join(dbDir, "state.sqlite3"));
+    stores.push(store);
+    store.setFrameworkDoc({
+      kind: "Framework",
+      schemaVersion: 1,
+      metadata: { id: "framework" },
+      spec: {
+        domain: "example.tld",
+        deploymentMode: "subdomain",
+        acmeEmail: "ops@example.tld",
+        roles: { networkProvider: "network-bridge", proxyEngine: "proxy-caddy", dnsProvider: "dns-namecheap" },
+      },
+    });
     const rolesHolder = { roles: {} };
-    const stage = buildLoadStage({ desiredDir, bundlesDir: "", store: null as unknown as StateStore, rolesHolder });
+    const stage = buildLoadStage({ desiredDir, bundlesDir: "", store, rolesHolder });
     await stage.run({});
     expect(rolesHolder.roles).toEqual({ networkProvider: "network-bridge", proxyEngine: "proxy-caddy", dnsProvider: "dns-namecheap" });
   });
@@ -66,24 +66,21 @@ describe("core reconciler stages", () => {
   it("load stage syncs the ipam macvlan range from framework.spec.network.macvlan on every load (T5.1)", async () => {
     const desiredDir = await tempDir();
     await mkdir(join(desiredDir, "services"), { recursive: true });
-    await writeFile(
-      join(desiredDir, "framework.json"),
-      JSON.stringify({
-        kind: "Framework",
-        schemaVersion: 1,
-        metadata: { id: "framework" },
-        spec: {
-          domain: "example.tld",
-          deploymentMode: "subdomain",
-          acmeEmail: "ops@example.tld",
-          roles: { networkProvider: "network-macvlan", proxyEngine: "proxy-caddy" },
-          network: { lanInterface: "eth0", macvlan: { parent: "eth0", reservedCidr: "192.168.1.240/29", gateway: "192.168.1.241" } },
-        },
-      }),
-    );
     const dbDir = await tempDir();
     const store = new StateStore(join(dbDir, "state.sqlite3"));
     stores.push(store);
+    store.setFrameworkDoc({
+      kind: "Framework",
+      schemaVersion: 1,
+      metadata: { id: "framework" },
+      spec: {
+        domain: "example.tld",
+        deploymentMode: "subdomain",
+        acmeEmail: "ops@example.tld",
+        roles: { networkProvider: "network-macvlan", proxyEngine: "proxy-caddy" },
+        network: { lanInterface: "eth0", macvlan: { parent: "eth0", reservedCidr: "192.168.1.240/29", gateway: "192.168.1.241" } },
+      },
+    });
     const stage = buildLoadStage({ desiredDir, bundlesDir: "", store });
     await stage.run({});
     expect(store.getIpamRange("macvlan")).toEqual({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.241" });
@@ -98,6 +95,19 @@ describe("core reconciler stages", () => {
     const stage = buildLoadStage({ desiredDir, bundlesDir: "", store });
     await stage.run({});
     expect(store.getIpamRange("macvlan")).toBeUndefined();
+  });
+
+  it("load stage warns once when a stale wanfw_desired/framework.json file exists (T5.3 cutover)", async () => {
+    const desiredDir = await tempDir();
+    await mkdir(join(desiredDir, "services"), { recursive: true });
+    await writeFile(join(desiredDir, "framework.json"), JSON.stringify({ stale: true }));
+    const warnings: string[] = [];
+    const log = { info: () => {}, warn: (msg: string) => warnings.push(msg), error: () => {} };
+    const stage = buildLoadStage({ desiredDir, bundlesDir: "", store: null as unknown as StateStore, log: log as never });
+    await stage.run({});
+    await stage.run({});
+    expect(warnings).toHaveLength(1); // warned once, not on every reconcile
+    expect(warnings[0]).toContain("wanfw_desired/framework.json exists but is ignored");
   });
 
   it("load stage fails with a structured error when a document is invalid", async () => {

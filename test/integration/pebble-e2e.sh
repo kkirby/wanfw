@@ -25,26 +25,29 @@ echo "==> Trusting every built-in, including dns-mock (Pebble-only, T4.7) and ce
 ./wanfwctl plugin trust --builtin-all --yes >/dev/null
 
 echo "==> Writing a framework doc bound to dns-mock (DNS-01 backend) + cert-letsencrypt-dns01 (issuer)"
-docker run --rm -v wanfw_wanfw_desired:/desired busybox sh -c "cat > /desired/framework.json <<EOF
-{
-  \"schemaVersion\": 1,
-  \"kind\": \"Framework\",
-  \"metadata\": { \"id\": \"framework\" },
-  \"spec\": {
-    \"domain\": \"test-domain.org\",
-    \"deploymentMode\": \"subdomain\",
-    \"acmeEmail\": \"ops@test-domain.org\",
-    \"roles\": {
-      \"networkProvider\": \"network-bridge\",
-      \"proxyEngine\": \"proxy-caddy\",
-      \"dnsProvider\": \"dns-mock\",
-      \"certIssuer\": \"cert-letsencrypt-dns01\"
+# The framework doc lives in wanfw_state now (T5.3, docs/t5.3-decisions.md
+# Decision 1), authored only via 'wanfwctl framework set' -- never a raw
+# wanfw_desired/framework.json write. Kept in a var so it can be re-set
+# later purely to trigger a fresh reconcile (POST /framework always fires
+# onFrameworkChange, regardless of whether the content actually changed).
+FRAMEWORK_DOC='{
+  "schemaVersion": 1,
+  "kind": "Framework",
+  "metadata": { "id": "framework" },
+  "spec": {
+    "domain": "test-domain.org",
+    "deploymentMode": "subdomain",
+    "acmeEmail": "ops@test-domain.org",
+    "roles": {
+      "networkProvider": "network-bridge",
+      "proxyEngine": "proxy-caddy",
+      "dnsProvider": "dns-mock",
+      "certIssuer": "cert-letsencrypt-dns01"
     }
   }
-}
-EOF
-mkdir -p /desired/services
-cat > /desired/services/kavita.json <<EOF
+}'
+echo "$FRAMEWORK_DOC" | ./wanfwctl framework set
+docker run --rm -v wanfw_wanfw_desired:/desired busybox sh -c "mkdir -p /desired/services && cat > /desired/services/kavita.json <<EOF
 {
   \"schemaVersion\": 1,
   \"kind\": \"Service\",
@@ -107,7 +110,7 @@ echo "==> [4/5] Forcing a real renewal: backdating gen-1's storedAt past the 30-
 docker run --rm -v wanfw_wanfw_certs:/certs busybox sh -c \
   "printf '{\"names\":[\"$HOSTNAME\"],\"storedAt\":\"2026-05-01T00:00:00.000Z\"}' > /certs/wildcard/gen-1/meta.json; \
    rm -f /certs/wildcard/renewal-state.json"
-docker run --rm -v wanfw_wanfw_desired:/desired busybox touch /desired/framework.json
+echo "$FRAMEWORK_DOC" | ./wanfwctl framework set >/dev/null
 
 RENEWED=""
 for _ in $(seq 1 30); do
@@ -126,7 +129,7 @@ fi
 
 echo "==> [5/5] The proxy's live Caddyfile references the latest generation's real cert path"
 docker rm -f wanfw-proxy >/dev/null 2>&1 || true
-docker run --rm -v wanfw_wanfw_desired:/desired busybox touch /desired/framework.json
+echo "$FRAMEWORK_DOC" | ./wanfwctl framework set >/dev/null
 sleep 8
 CADDYFILE=$(docker run --rm -v wanfw_wanfw_proxycfg:/proxycfg busybox cat /proxycfg/Caddyfile 2>/dev/null || echo "")
 if echo "$CADDYFILE" | grep -q "gen-2/fullchain.pem"; then

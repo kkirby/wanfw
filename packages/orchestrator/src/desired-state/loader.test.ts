@@ -28,25 +28,30 @@ describe("loadDesiredState", () => {
     expect(state.errors).toEqual([]);
   });
 
-  it("loads a valid framework document", async () => {
+  it("loads a valid framework document, passed in already-parsed (T5.3: it lives in wanfw_state, not a file)", async () => {
     const dir = await tempDesiredDir();
-    await writeFile(
-      join(dir, "framework.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        kind: "Framework",
-        metadata: { id: "framework" },
-        spec: {
-          domain: "example.tld",
-          deploymentMode: "subdomain",
-          acmeEmail: "ops@example.tld",
-          roles: { networkProvider: "network-bridge", proxyEngine: "proxy-caddy" },
-        },
-      }),
-    );
-    const state = await loadDesiredState(dir);
+    const frameworkRaw = {
+      schemaVersion: 1,
+      kind: "Framework",
+      metadata: { id: "framework" },
+      spec: {
+        domain: "example.tld",
+        deploymentMode: "subdomain",
+        acmeEmail: "ops@example.tld",
+        roles: { networkProvider: "network-bridge", proxyEngine: "proxy-caddy" },
+      },
+    };
+    const state = await loadDesiredState(dir, frameworkRaw);
     expect(state.framework?.id).toBe("framework");
     expect(state.errors).toEqual([]);
+  });
+
+  it("surfaces an invalid framework document as a structured error, same as a file-loaded document would", async () => {
+    const dir = await tempDesiredDir();
+    const state = await loadDesiredState(dir, { kind: "Framework" }); // missing schemaVersion/metadata/spec
+    expect(state.framework).toBeUndefined();
+    expect(state.errors).toHaveLength(1);
+    expect(state.errors[0]?.message).toContain("envelope invalid");
   });
 
   it("loads multiple valid service documents", async () => {

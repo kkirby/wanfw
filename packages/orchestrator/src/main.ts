@@ -103,7 +103,7 @@ const rolesHolder: FrameworkRolesHolder = { roles: {} };
 // validate, gate, execute, observe -- the full pipeline shape from §7.
 const reconcileEngine = new ReconcileEngine({
   stages: [
-    buildLoadStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore, rolesHolder }),
+    buildLoadStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore, rolesHolder, log }),
     buildResolveStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore }),
     buildPlanStage({ invokePlugin: pluginInvoker, lookupCertPaths: (name) => currentCertPaths(paths.certsDir, name) }),
     buildRenewalStage({
@@ -180,6 +180,7 @@ const adminServer: Server = listenOnUnixSocket(
     gateSnapshotHolder,
     onApprovalChange: () => void reconcileEngine.trigger("plan-approve"),
     onCertChange: () => void reconcileEngine.trigger("cert-rollback"),
+    onFrameworkChange: () => void reconcileEngine.trigger("framework-set"),
   }),
   paths.adminSocketPath,
   0o600,

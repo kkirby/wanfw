@@ -34,18 +34,18 @@ function kindValidator(kind: string) {
   return undefined;
 }
 
-async function loadOneDocument(path: string): Promise<{ doc?: LoadedDocument; error?: DocumentError }> {
-  let raw: unknown;
-  try {
-    const text = await readFile(path, "utf8");
-    raw = JSON.parse(text);
-  } catch (err) {
-    return { error: { sourcePath: path, message: `could not read/parse: ${(err as Error).message}` } };
-  }
-
+/**
+ * Validates+migrates an already-parsed envelope object, independent of
+ * where it came from -- a file under `wanfw_desired` (services, plugin
+ * configs) or, since T5.3's framework-doc relocation, the state store
+ * (`StateStore.getFrameworkDoc`/admin-socket `POST /framework`, which
+ * reuses this exact function so a bad framework doc is rejected at write
+ * time with the same message the file loader would have produced).
+ */
+export function validateEnvelope(raw: unknown, sourcePath: string): { doc?: LoadedDocument; error?: DocumentError } {
   if (!validators.envelope(raw)) {
     const details = (validators.envelope.errors ?? []).map((e) => `${e.instancePath || "/"} ${e.message}`).join("; ");
-    return { error: { sourcePath: path, message: `envelope invalid: ${details}` } };
+    return { error: { sourcePath, message: `envelope invalid: ${details}` } };
   }
 
   const envelope = raw as {
@@ -58,7 +58,7 @@ async function loadOneDocument(path: string): Promise<{ doc?: LoadedDocument; er
   const specValidator = kindValidator(envelope.kind);
   if (specValidator && !specValidator(envelope.spec)) {
     const details = (specValidator.errors ?? []).map((e) => `${e.instancePath || "/"} ${e.message}`).join("; ");
-    return { error: { sourcePath: path, message: `spec invalid: ${details}` } };
+    return { error: { sourcePath, message: `spec invalid: ${details}` } };
   }
 
   let migration: MigrationResult;
@@ -66,7 +66,7 @@ async function loadOneDocument(path: string): Promise<{ doc?: LoadedDocument; er
     migration = migrateDocumentSpec(envelope.kind, envelope.metadata.id, envelope.schemaVersion, envelope.spec);
   } catch (err) {
     if (err instanceof DocumentTooNewError) {
-      return { error: { sourcePath: path, message: err.message } };
+      return { error: { sourcePath, message: err.message } };
     }
     throw err;
   }
@@ -79,9 +79,20 @@ async function loadOneDocument(path: string): Promise<{ doc?: LoadedDocument; er
       spec: migration.spec,
       schemaVersion: migration.finalVersion,
       needsPersist: migration.needsPersist,
-      sourcePath: path,
+      sourcePath,
     },
   };
+}
+
+async function loadOneDocument(path: string): Promise<{ doc?: LoadedDocument; error?: DocumentError }> {
+  let raw: unknown;
+  try {
+    const text = await readFile(path, "utf8");
+    raw = JSON.parse(text);
+  } catch (err) {
+    return { error: { sourcePath: path, message: `could not read/parse: ${(err as Error).message}` } };
+  }
+  return validateEnvelope(raw, path);
 }
 
 async function listJsonFiles(dir: string): Promise<string[]> {
@@ -89,15 +100,24 @@ async function listJsonFiles(dir: string): Promise<string[]> {
   return entries.filter((e) => e.isFile() && e.name.endsWith(".json")).map((e) => join(dir, e.name));
 }
 
-/** Loads and validates every document currently in wanfw_desired. Never writes to it (invariant #10). */
-export async function loadDesiredState(desiredDir: string): Promise<DesiredState> {
+/**
+ * Loads and validates every document currently in wanfw_desired. Never
+ * writes to it (invariant #10). The framework document is no longer one of
+ * them (T5.3): it lives in `wanfw_state`, authored only via the admin
+ * socket's `POST /framework` (see `docs/t5.3-decisions.md`), and is passed
+ * in here already-loaded (or `undefined` pre-init) by the caller
+ * (`buildLoadStage`, which reads it from `StateStore.getFrameworkDoc`) --
+ * `loadDesiredState` only ever validates it, via the same `validateEnvelope`
+ * the write path already ran it through once, so a framework doc that made
+ * it into the store can't fail differently on load than it did on write.
+ */
+export async function loadDesiredState(desiredDir: string, frameworkRaw?: unknown): Promise<DesiredState> {
   const state: DesiredState = { services: new Map(), pluginConfigs: new Map(), errors: [] };
 
-  const frameworkPath = join(desiredDir, "framework.json");
-  const frameworkResult = await loadOneDocument(frameworkPath).catch(() => undefined);
-  if (frameworkResult?.doc) state.framework = frameworkResult.doc;
-  else if (frameworkResult?.error && !frameworkResult.error.message.includes("could not read/parse")) {
-    state.errors.push(frameworkResult.error);
+  if (frameworkRaw !== undefined) {
+    const frameworkResult = validateEnvelope(frameworkRaw, "wanfw_state:framework");
+    if (frameworkResult.doc) state.framework = frameworkResult.doc;
+    else if (frameworkResult.error) state.errors.push(frameworkResult.error);
   }
 
   const serviceFiles = await listJsonFiles(join(desiredDir, "services"));
