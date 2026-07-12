@@ -13,6 +13,7 @@ import {
   type TrustFlowDeps,
   invokeTrustedPlugin,
 } from "./trust/index.js";
+import { publishComposedSchema } from "./composed-schema/index.js";
 
 /** Mutable holder so `key import`/`key rotate` can swap the live manager instance. */
 export interface SigningKeyHolder {
@@ -33,6 +34,7 @@ export interface AdminSocketDeps {
   pluginConnectionHolder: PluginConnectionHolder;
   stagingDir: string;
   bundlesDir: string;
+  statusDir: string;
 }
 
 /**
@@ -115,6 +117,7 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
     }
     try {
       const result = await trustStagedBundle(trustDeps(), id, sha256);
+      await publishComposedSchema(store, deps.bundlesDir, deps.statusDir);
       return { status: 200, body: result };
     } catch (err) {
       if (err instanceof TrustFlowError) {
@@ -149,6 +152,7 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
       });
       results.push(result);
     }
+    await publishComposedSchema(store, deps.bundlesDir, deps.statusDir);
     return { status: 200, body: { trusted: results } };
   });
 
@@ -159,6 +163,7 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
     }
     try {
       untrustPlugin(trustDeps(), id);
+      await publishComposedSchema(store, deps.bundlesDir, deps.statusDir);
       return { status: 200, body: { pluginId: id, untrusted: true } };
     } catch (err) {
       if (err instanceof TrustFlowError) {

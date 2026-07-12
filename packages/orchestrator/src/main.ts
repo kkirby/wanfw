@@ -13,6 +13,7 @@ import { listenPluginSocket } from "./plugin-socket.js";
 import type { JsonRpcConnection } from "@wanfw/pluginhost";
 import { buildHostApiDispatcher } from "./host-api/index.js";
 import { loadDesiredState, watchDesiredState, type DesiredState } from "./desired-state/index.js";
+import { publishComposedSchema } from "./composed-schema/index.js";
 
 const log = createLogger("orchestrator");
 const paths = resolvePaths();
@@ -74,10 +75,14 @@ async function reloadDesiredState(): Promise<void> {
 const desiredStateWatcher = watchDesiredState(paths.desiredDir, () => void reloadDesiredState());
 await reloadDesiredState();
 
+await publishComposedSchema(stateStore, paths.bundlesDir, paths.statusDir);
+log.info("composed schema published", { path: `${paths.statusDir}/schema.json` });
+
 const statusServer: Server = listenOnUnixSocket(
   buildStatusSocketRouter(heartbeatState, nudgeState, {
     store: stateStore,
     stagingDir: paths.stagingDir,
+    statusDir: paths.statusDir,
     onNudge: () => desiredStateWatcher.nudge(),
   }),
   paths.statusSocketPath,
@@ -96,6 +101,7 @@ const adminServer: Server = listenOnUnixSocket(
     pluginConnectionHolder,
     stagingDir: paths.stagingDir,
     bundlesDir: paths.bundlesDir,
+    statusDir: paths.statusDir,
   }),
   paths.adminSocketPath,
   0o600,

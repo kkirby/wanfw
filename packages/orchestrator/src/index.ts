@@ -11,3 +11,4 @@ export * from "./plugin-socket.js";
 export * from "./host-api/index.js";
 export * from "./trust/index.js";
 export * from "./desired-state/index.js";
+export * from "./composed-schema/index.js";

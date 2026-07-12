@@ -37,13 +37,17 @@ async function freshRouter() {
   const dbDir = await mkdtemp(join(tmpdir(), "wanfw-status-router-"));
   const store = new StateStore(join(dbDir, "state.sqlite3"));
   const stagingDir = await mkdtemp(join(tmpdir(), "wanfw-status-staging-"));
+  const bundlesDir = await mkdtemp(join(tmpdir(), "wanfw-status-bundles-"));
+  const statusDir = await mkdtemp(join(tmpdir(), "wanfw-status-statusdir-"));
   return {
-    router: buildStatusSocketRouter(heartbeat, nudge, { store, stagingDir }),
+    router: buildStatusSocketRouter(heartbeat, nudge, { store, stagingDir, statusDir }),
     heartbeat,
     nudge,
     store,
     dbDir,
     stagingDir,
+    bundlesDir,
+    statusDir,
   };
 }
 
@@ -74,14 +78,14 @@ describe("status socket handlers (live HTTP over a real Unix socket)", () => {
   });
 
   async function boot() {
-    const { router, heartbeat, nudge, store, dbDir, stagingDir } = await freshRouter();
-    dirs.push(dbDir, stagingDir);
+    const { router, heartbeat, nudge, store, dbDir, stagingDir, bundlesDir, statusDir } = await freshRouter();
+    dirs.push(dbDir, stagingDir, bundlesDir, statusDir);
     const dir = await mkdtemp(join(tmpdir(), "wanfw-status-socket-"));
     dirs.push(dir);
     const socketPath = join(dir, "orch-status.sock");
     servers.push(listenOnUnixSocket(router, socketPath));
     await new Promise((r) => setTimeout(r, 50));
-    return { socketPath, heartbeat, nudge, store, stagingDir };
+    return { socketPath, heartbeat, nudge, store, stagingDir, bundlesDir, statusDir };
   }
 
   it("GET /status returns the current heartbeat", async () => {
@@ -91,10 +95,38 @@ describe("status socket handlers (live HTTP over a real Unix socket)", () => {
     expect((res.body as { phase: string }).phase).toBe("pending-init");
   });
 
-  it("GET /schema returns 404 until T3.2 implements composed schema publishing", async () => {
+  it("GET /schema returns 404 when no composed schema has been published yet", async () => {
     const { socketPath } = await boot();
     const res = await requestOverSocket(socketPath, "GET", "/schema");
     expect(res.status).toBe(404);
+  });
+
+  it("GET /schema returns the published composed schema (T3.2)", async () => {
+    const { socketPath, statusDir, store, bundlesDir } = await boot();
+    const { publishComposedSchema } = await import("./composed-schema/index.js");
+    await publishComposedSchema(store, bundlesDir, statusDir);
+
+    const res = await requestOverSocket(socketPath, "GET", "/schema");
+    expect(res.status).toBe(200);
+    expect((res.body as { envelope: unknown }).envelope).toBeDefined();
+  });
+
+  it("POST /validate validates a draft against the published composed schema", async () => {
+    const { socketPath, statusDir, store, bundlesDir } = await boot();
+    const { publishComposedSchema } = await import("./composed-schema/index.js");
+    await publishComposedSchema(store, bundlesDir, statusDir);
+
+    const res = await requestOverSocket(socketPath, "POST", "/validate", {
+      schemaVersion: 1,
+      kind: "Service",
+      metadata: { id: "jellyfin" },
+      spec: {
+        deploy: { plugin: "deploy-docker" },
+        expose: { hostname: "jellyfin", backendPort: 8096, backendProtocol: "http" },
+      },
+    });
+    expect(res.status).toBe(200);
+    expect((res.body as { valid: boolean }).valid).toBe(true);
   });
 
   it("GET /approvals/pending returns an empty list until T3.7", async () => {
@@ -104,11 +136,11 @@ describe("status socket handlers (live HTTP over a real Unix socket)", () => {
     expect(res.body).toEqual({ pending: [] });
   });
 
-  it("POST /validate returns 501 and never mutates heartbeat state (pure function contract, §5.5)", async () => {
+  it("POST /validate returns 503 with no published schema yet, and never mutates heartbeat state (pure function contract, §5.5)", async () => {
     const { socketPath, heartbeat } = await boot();
     const before = JSON.stringify(heartbeat.current);
     const res = await requestOverSocket(socketPath, "POST", "/validate", { schemaVersion: 1 });
-    expect(res.status).toBe(501);
+    expect(res.status).toBe(503);
     expect(JSON.stringify(heartbeat.current)).toBe(before);
   });
 

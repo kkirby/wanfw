@@ -1,7 +1,10 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { JsonUdsRouter } from "./uds-server.js";
 import type { HeartbeatState } from "./heartbeat.js";
 import type { StateStore } from "./state-store/store.js";
 import { listStagedBundles } from "./trust/index.js";
+import { validateDraftDocument, type ComposedSchema } from "./composed-schema/index.js";
 
 /**
  * Status socket (§2.2): read-only, pure validation, and a nudge. Zero
@@ -42,7 +45,7 @@ export interface StatusSocketDeps {
 export function buildStatusSocketRouter(
   heartbeat: HeartbeatState,
   nudge: NudgeState,
-  extra?: { store: StateStore; stagingDir: string; onNudge?: () => void },
+  extra?: { store: StateStore; stagingDir: string; statusDir?: string; onNudge?: () => void },
 ): JsonUdsRouter {
   const router = new JsonUdsRouter();
 
@@ -56,20 +59,37 @@ export function buildStatusSocketRouter(
     body: { error: "not_found", message: `no service '${params.id}' (reconciler lands in T3.x)` },
   }));
 
-  router.register("GET", "/schema", async () => ({
-    status: 404,
-    body: { error: "not_implemented", message: "composed schema publishing lands in T3.2" },
-  }));
+  router.register("GET", "/schema", async () => {
+    if (!extra?.statusDir) {
+      return { status: 404, body: { error: "not_implemented", message: "composed schema publishing lands in T3.2" } };
+    }
+    try {
+      const raw = await readFile(join(extra.statusDir, "schema.json"), "utf8");
+      return { status: 200, body: JSON.parse(raw) };
+    } catch {
+      return { status: 404, body: { error: "not_found", message: "no composed schema published yet" } };
+    }
+  });
 
   router.register("GET", "/approvals/pending", async () => ({
     status: 200,
     body: { pending: [] },
   }));
 
-  router.register("POST", "/validate", async () => ({
-    status: 501,
-    body: { error: "not_implemented", message: "validate lands in T3.2; this must remain a pure function" },
-  }));
+  router.register("POST", "/validate", async ({ body }) => {
+    if (!extra?.statusDir) {
+      return { status: 501, body: { error: "not_implemented", message: "validate lands in T3.2" } };
+    }
+    let composed: ComposedSchema;
+    try {
+      const raw = await readFile(join(extra.statusDir, "schema.json"), "utf8");
+      composed = JSON.parse(raw) as ComposedSchema;
+    } catch {
+      return { status: 503, body: { error: "schema_unavailable", message: "no composed schema published yet" } };
+    }
+    const result = validateDraftDocument(composed, body);
+    return { status: 200, body: result };
+  });
 
   router.register("POST", "/nudge", async () => {
     nudge.nudgedAt = new Date().toISOString();
