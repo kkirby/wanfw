@@ -93,3 +93,18 @@ export async function getTrustedPlugin(
   if (res.status !== 200) return undefined;
   return res.body as { trusted: TrustRecord[]; grants: GrantRecord[] };
 }
+
+export interface ComposedSchema {
+  envelope: unknown;
+  framework: unknown;
+  service: unknown;
+  pluginConfigSchemas: Record<string, unknown>;
+  boundDeployPluginId?: string;
+}
+
+/** The composed schema (§5.5) T3.13's form renderer walks -- published by the orchestrator after every plugin-set change. */
+export async function getComposedSchema(): Promise<ComposedSchema | undefined> {
+  const res = await orchRequest("GET", "/schema");
+  if (res.status !== 200) return undefined;
+  return res.body as ComposedSchema;
+}
