@@ -79,3 +79,7 @@ The integration suites bring up the real compose stack, exercise it, and tear th
 ## Status
 
 MVP complete (Gate M5) -- see `docs/PROGRESS.md` for the full build history and what's been live-verified where. Post-MVP hardening (per-plugin network isolation, additional DNS/deploy providers, multi-host) is out of scope for v1 and tracked in the design spec's own residual-risk section rather than promised here.
+
+## License
+
+Public domain -- see `LICENSE` (Unlicense).
