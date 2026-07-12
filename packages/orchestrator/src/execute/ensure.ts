@@ -79,6 +79,14 @@ export async function ensureContainer(
   const confighash = computeConfigHash(spec);
   const existing = await docker.findManagedContainerByName(name);
   if (existing && existing.labels["wanfw.confighash"] === confighash) {
+    // Same config, but not actually running (e.g. a prior EXECUTE crashed
+    // between create and start, or the host stopped it): the confighash
+    // match alone doesn't mean converged, so this still counts as a step
+    // that changed something.
+    if (existing.state !== "running") {
+      await docker.startContainer(existing.id);
+      return { step: `ensureContainer:${name}`, changed: true, detail: "started (was not running)" };
+    }
     return { step: `ensureContainer:${name}`, changed: false, detail: "unchanged" };
   }
 

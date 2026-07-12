@@ -108,3 +108,37 @@ export async function getComposedSchema(): Promise<ComposedSchema | undefined> {
   if (res.status !== 200) return undefined;
   return res.body as ComposedSchema;
 }
+
+export interface ServiceStatusDoc {
+  serviceId: string;
+  phase: "pending" | "reconciling" | "live" | "degraded" | "pending-approval" | "error";
+  endpoints: string[];
+  certNotAfter: string | null;
+  lastError?: { stage: string; plugin?: string; message: string };
+  needsPersist?: { toVersion: number };
+}
+
+export async function listServiceStatuses(): Promise<ServiceStatusDoc[]> {
+  const res = await orchRequest("GET", "/status/services");
+  return ((res.body as { services: ServiceStatusDoc[] } | undefined)?.services) ?? [];
+}
+
+export async function getServiceStatus(id: string): Promise<ServiceStatusDoc | undefined> {
+  const res = await orchRequest("GET", `/status/services/${encodeURIComponent(id)}`);
+  if (res.status !== 200) return undefined;
+  return res.body as ServiceStatusDoc;
+}
+
+export interface GatedPlan {
+  serviceId: string;
+  tier: "baseline" | "powerful";
+  projectionHash: string;
+  humanRendering: string;
+  approved: boolean;
+}
+
+/** Pending/approved powerful plans (GATE, T3.7) -- read-only here; approval is CLI-only (ADR-6), never a tier1 button. */
+export async function listGatedPlans(): Promise<GatedPlan[]> {
+  const res = await orchRequest("GET", "/plans");
+  return ((res.body as { plans: GatedPlan[] } | undefined)?.plans) ?? [];
+}

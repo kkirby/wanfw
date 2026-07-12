@@ -1,7 +1,7 @@
 "use client";
 
 import { ActionIcon, Checkbox, Group, NumberInput, Select, Stack, Text, TextInput, Textarea } from "@mantine/core";
-import type { FieldNode, ObjectArrayVariant } from "../../lib/schema-form/types.js";
+import type { FieldNode, ObjectArrayVariant } from "../../lib/schema-form/types";
 
 export interface SchemaFormProps {
   fields: FieldNode[];

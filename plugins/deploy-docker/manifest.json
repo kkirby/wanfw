@@ -9,7 +9,7 @@
   "configSchema": "config-schema.json",
   "capabilities": [
     { "cap": "docker.image.pull", "scope": { "repos": ["*"] }, "reason": "pull the image named in the service's deploy config", "enforcement": "enforced" },
-    { "cap": "docker.mount.bind", "scope": { "paths": ["*"] }, "reason": "bind-mount host paths listed in a service's deploy config (per-service CLI approval still required -- ADR-6 -- since bind is powerful-tier)", "enforcement": "enforced" },
-    { "cap": "docker.device", "scope": { "paths": ["*"] }, "reason": "attach host devices (e.g. /dev/dri/* for hardware transcoding) listed in a service's deploy config (per-service CLI approval still required, powerful-tier)", "enforcement": "enforced" }
+    { "cap": "docker.mount.bind", "scope": { "paths": ["/*"] }, "reason": "bind-mount host paths listed in a service's deploy config (per-service CLI approval still required -- ADR-6 -- since bind is powerful-tier)", "enforcement": "enforced" },
+    { "cap": "docker.device", "scope": { "paths": ["/*"] }, "reason": "attach host devices (e.g. /dev/dri/* for hardware transcoding) listed in a service's deploy config (per-service CLI approval still required, powerful-tier)", "enforcement": "enforced" }
   ]
 }

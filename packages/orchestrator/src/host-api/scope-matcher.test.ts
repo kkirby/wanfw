@@ -51,6 +51,12 @@ describe("matchPathGlob (§12.1 canonical scenario)", () => {
     expect(matchAnyPathGlob(["/dev/dri/*", "/dev/dvb/*"], "/dev/dvb/adapter0")).toBe(true);
     expect(matchAnyPathGlob(["/dev/dri/*", "/dev/dvb/*"], "/dev/sda")).toBe(false);
   });
+
+  it("a root grant (\"/*\") matches any absolute path -- the degenerate case where the prefix-plus-slash check would otherwise require a spurious \"//\"", () => {
+    expect(matchPathGlob("/*", "/dev/sda")).toBe(true);
+    expect(matchPathGlob("/*", "/srv/media/movies")).toBe(true);
+    expect(matchPathGlob("/*", "/")).toBe(true);
+  });
 });
 
 describe("matchNamePrefix", () => {

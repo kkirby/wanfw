@@ -1,4 +1,4 @@
-import { Alert, Badge, Card, Code, Group, Stack, Table, Text, Title } from "@mantine/core";
+import { Alert, Badge, Card, Code, Group, Stack, Table, TableTbody, TableTd, TableTh, TableThead, TableTr, Text, Title } from "@mantine/core";
 import { listPendingPlugins, listTrustedPlugins } from "../../../lib/orch";
 import { UploadForm } from "./upload-form";
 
@@ -34,25 +34,25 @@ export default async function PluginsPage() {
           </Text>
         ) : (
           <Table>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Plugin</Table.Th>
-                <Table.Th>Version</Table.Th>
-                <Table.Th>Hash</Table.Th>
-                <Table.Th>Granted capabilities</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
+            <TableThead>
+              <TableTr>
+                <TableTh>Plugin</TableTh>
+                <TableTh>Version</TableTh>
+                <TableTh>Hash</TableTh>
+                <TableTh>Granted capabilities</TableTh>
+              </TableTr>
+            </TableThead>
+            <TableTbody>
               {trusted.map((t) => {
                 const caps = JSON.parse(t.granted_caps_json) as string[];
                 return (
-                  <Table.Tr key={`${t.plugin_id}@${t.version}`}>
-                    <Table.Td>{t.plugin_id}</Table.Td>
-                    <Table.Td>{t.version}</Table.Td>
-                    <Table.Td>
+                  <TableTr key={`${t.plugin_id}@${t.version}`}>
+                    <TableTd>{t.plugin_id}</TableTd>
+                    <TableTd>{t.version}</TableTd>
+                    <TableTd>
                       <Code>{t.sha256.slice(0, 12)}…</Code>
-                    </Table.Td>
-                    <Table.Td>
+                    </TableTd>
+                    <TableTd>
                       <Group gap={4}>
                         {caps.map((c) => (
                           <Badge key={c} size="sm" variant="light">
@@ -60,11 +60,11 @@ export default async function PluginsPage() {
                           </Badge>
                         ))}
                       </Group>
-                    </Table.Td>
-                  </Table.Tr>
+                    </TableTd>
+                  </TableTr>
                 );
               })}
-            </Table.Tbody>
+            </TableTbody>
           </Table>
         )}
       </Card>

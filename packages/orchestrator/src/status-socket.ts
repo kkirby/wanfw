@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { JsonUdsRouter } from "./uds-server.js";
 import type { HeartbeatState } from "./heartbeat.js";
@@ -22,6 +22,7 @@ import type { GateSnapshotHolder } from "./reconciler/index.js";
  */
 export const STATUS_SOCKET_ROUTE_ALLOWLIST: ReadonlyArray<{ method: string; path: string }> = [
   { method: "GET", path: "/status" },
+  { method: "GET", path: "/status/services" },
   { method: "GET", path: "/status/services/:id" },
   { method: "GET", path: "/schema" },
   { method: "GET", path: "/approvals/pending" },
@@ -63,10 +64,32 @@ export function buildStatusSocketRouter(
     body: heartbeat.current,
   }));
 
-  router.register("GET", "/status/services/:id", async ({ params }) => ({
-    status: 404,
-    body: { error: "not_found", message: `no service '${params.id}' (reconciler lands in T3.x)` },
-  }));
+  router.register("GET", "/status/services", async () => {
+    if (!extra?.statusDir) return { status: 200, body: { services: [] } };
+    try {
+      const files = await readdir(join(extra.statusDir, "services"));
+      const services = await Promise.all(
+        files
+          .filter((f) => f.endsWith(".json"))
+          .map(async (f) => JSON.parse(await readFile(join(extra.statusDir!, "services", f), "utf8"))),
+      );
+      return { status: 200, body: { services } };
+    } catch {
+      return { status: 200, body: { services: [] } };
+    }
+  });
+
+  router.register("GET", "/status/services/:id", async ({ params }) => {
+    if (!extra?.statusDir) {
+      return { status: 404, body: { error: "not_found", message: `no service '${params.id}'` } };
+    }
+    try {
+      const raw = await readFile(join(extra.statusDir, "services", `${params.id}.json`), "utf8");
+      return { status: 200, body: JSON.parse(raw) };
+    } catch {
+      return { status: 404, body: { error: "not_found", message: `no service '${params.id}'` } };
+    }
+  });
 
   router.register("GET", "/schema", async () => {
     if (!extra?.statusDir) {

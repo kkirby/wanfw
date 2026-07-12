@@ -1,6 +1,6 @@
 import { describe, expect, it, afterEach } from "vitest";
 import { request } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
@@ -153,10 +153,32 @@ describe("status socket handlers (live HTTP over a real Unix socket)", () => {
     expect(nudge.nudgedAt).not.toBeNull();
   });
 
-  it("GET /status/services/:id returns 404 until the reconciler exists (T3.x)", async () => {
+  it("GET /status/services/:id returns 404 when no status doc has been published for that service", async () => {
     const { socketPath } = await boot();
     const res = await requestOverSocket(socketPath, "GET", "/status/services/jellyfin");
     expect(res.status).toBe(404);
+  });
+
+  it("GET /status/services/:id returns OBSERVE's published status doc (T3.9)", async () => {
+    const { socketPath, statusDir } = await boot();
+    await mkdir(join(statusDir, "services"), { recursive: true });
+    await writeFile(join(statusDir, "services", "jellyfin.json"), JSON.stringify({ serviceId: "jellyfin", phase: "live", endpoints: [] }));
+
+    const res = await requestOverSocket(socketPath, "GET", "/status/services/jellyfin");
+    expect(res.status).toBe(200);
+    expect((res.body as { phase: string }).phase).toBe("live");
+  });
+
+  it("GET /status/services lists every published status doc (tier1's dashboard read path)", async () => {
+    const { socketPath, statusDir } = await boot();
+    await mkdir(join(statusDir, "services"), { recursive: true });
+    await writeFile(join(statusDir, "services", "jellyfin.json"), JSON.stringify({ serviceId: "jellyfin", phase: "live" }));
+    await writeFile(join(statusDir, "services", "kavita.json"), JSON.stringify({ serviceId: "kavita", phase: "reconciling" }));
+
+    const res = await requestOverSocket(socketPath, "GET", "/status/services");
+    expect(res.status).toBe(200);
+    const services = (res.body as { services: Array<{ serviceId: string }> }).services;
+    expect(services.map((s) => s.serviceId).sort()).toEqual(["jellyfin", "kavita"]);
   });
 
   it("GET /plugins reflects live trust records (tier1's read path to trust data)", async () => {

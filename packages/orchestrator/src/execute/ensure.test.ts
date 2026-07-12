@@ -34,6 +34,19 @@ describe("ensure primitives (§7 EXECUTE, ADR-9)", () => {
     expect(docker.containers.size).toBe(1);
   });
 
+  it("ensureContainer: a same-confighash container that isn't running (e.g. a prior crash between create and start) gets started, not left forgotten", async () => {
+    const docker = new FakeDockerClient();
+    const spec: ContainerSpec = { image: "jellyfin/jellyfin:10.9.11" };
+    const first = await ensureContainer(docker, "wanfw_jellyfin", spec, { service: "jellyfin", plan: "p1" });
+    expect(first.changed).toBe(true);
+    docker.containers.get("wanfw_jellyfin")!.state = "created"; // simulate a crash between create and start
+
+    const second = await ensureContainer(docker, "wanfw_jellyfin", spec, { service: "jellyfin", plan: "p2" });
+    expect(second.changed).toBe(true);
+    expect(second.detail).toBe("started (was not running)");
+    expect(docker.containers.get("wanfw_jellyfin")!.state).toBe("running");
+  });
+
   it("ensureContainer: an env-only edit still recreates (confighash covers the FULL spec, unlike the approval projection hash)", async () => {
     const docker = new FakeDockerClient();
     const specA: ContainerSpec = { image: "jellyfin/jellyfin:10.9.11", env: { TZ: "UTC" } };

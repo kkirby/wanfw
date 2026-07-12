@@ -26,6 +26,11 @@ export function matchPathGlob(pattern: string, path: string): boolean {
   if (canonicalPath === null || canonicalPattern === null) return false;
 
   if (pattern.endsWith("/*")) {
+    // Root ("/*") is the one case where canonicalPattern itself is "/":
+    // every canonicalized path already starts with "/", so it always
+    // matches; the general prefix-plus-slash check below would otherwise
+    // require a spurious "//" and never match anything.
+    if (canonicalPattern === "/") return true;
     return canonicalPath === canonicalPattern || canonicalPath.startsWith(`${canonicalPattern}/`);
   }
   return canonicalPath === canonicalPattern;
