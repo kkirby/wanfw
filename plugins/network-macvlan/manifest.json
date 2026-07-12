@@ -1,0 +1,12 @@
+{
+  "manifestVersion": 1,
+  "id": "network-macvlan",
+  "version": "0.1.0",
+  "frameworkApi": "^1.0.0",
+  "types": ["network-provider"],
+  "entrypoint": "main.js",
+  "runtime": "node22",
+  "capabilities": [
+    { "cap": "docker.network.provision", "scope": { "mode": "macvlan" }, "reason": "create the macvlan network on the parent interface and attach the proxy to it (ADR-1 opt-in provider)", "enforcement": "enforced" }
+  ]
+}

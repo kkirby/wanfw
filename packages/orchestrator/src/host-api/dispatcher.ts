@@ -32,6 +32,8 @@ export interface HostApiDispatcherDeps {
   pluginInvoker: PluginInvoker;
   /** Triggers a reconcile after a cert is stored/rolled back, so EXECUTE's proxy reload picks up the new cert on the next pass (T4.5) -- same "mutation -> immediate re-trigger" pattern as T3.7's onApprovalChange. */
   onCertChange?: () => void;
+  /** `net.probeNetwork` (T5.2, ADR-1): the real Docker-daemon-backed macvlan feasibility check, injected as a plain function (not the whole `DockerClient`) so this module stays decoupled from Docker specifics, same reasoning as every other host API dependency here. */
+  probeNetwork?: (mode: "macvlan", parent: string) => Promise<{ ok: boolean; reason?: string }>;
 }
 
 /**
@@ -175,6 +177,17 @@ export function buildHostApiDispatcher(deps: HostApiDispatcherDeps): (params: un
       store.releaseIp(ip);
       log.info("ipam address released", { component: "plugin", pluginId, ip });
       return {};
+    },
+    "net.probeNetwork": async (pluginId, args) => {
+      const { mode, parent } = args as { mode: "macvlan"; parent: string };
+      const types = await callingPluginTypes(pluginId);
+      if (!types.includes("network-provider")) {
+        throw new CapabilityError(`net.probeNetwork denied: ${pluginId} is not a trusted network-provider plugin`);
+      }
+      if (!deps.probeNetwork) {
+        return { ok: false, reason: "network probing is unavailable in this environment" };
+      }
+      return deps.probeNetwork(mode, parent);
     },
   };
 

@@ -67,6 +67,22 @@ export interface DockerClient {
   listManagedVolumes(): Promise<DockerVolumeInfo[]>;
   removeNetwork(id: string): Promise<void>;
   removeVolume(name: string): Promise<void>;
+
+  /**
+   * `net.probeNetwork` (T5.2, ADR-1): attempts to actually create a
+   * throwaway macvlan network on `parent`, then immediately removes it --
+   * the only way to know for real whether macvlan works on a given host
+   * interface (MAC filtering, no promiscuous mode, a WiFi uplink, etc. all
+   * surface here as a Docker daemon error, not something inferable any
+   * other way). The daemon validates against the *host's* real NIC
+   * regardless of the orchestrator container's own network namespace
+   * (`network_mode: "none"`, §12.5) -- this is a Docker API call over the
+   * Unix socket, not something requiring the caller's own network access.
+   * A syntactically valid but unrealistic throwaway subnet is fine: the
+   * daemon still validates real parent-interface capability at creation
+   * time regardless of whether the subnet reflects anything real.
+   */
+  probeMacvlan(parent: string): Promise<{ ok: boolean; reason?: string }>;
 }
 
 const MANAGED_LABEL = "wanfw.managed";
@@ -216,6 +232,26 @@ export function buildRealDockerClient(socketPath?: string): DockerClient {
 
     async removeVolume(name) {
       await docker.getVolume(name).remove();
+    },
+
+    async probeMacvlan(parent) {
+      const probeName = `wanfw-macvlan-probe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      try {
+        const created = await docker.createNetwork({
+          Name: probeName,
+          Driver: "macvlan",
+          Options: { parent },
+          // Link-local, deliberately unrealistic (§8.4's own reserved-range
+          // guidance is about the *real* macvlan network, not this
+          // throwaway probe) -- the daemon still validates real parent
+          // capability at creation time regardless of subnet realism.
+          IPAM: { Config: [{ Subnet: "169.254.100.0/24" }] },
+        });
+        await docker.getNetwork(created.id).remove();
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, reason: (err as Error).message };
+      }
     },
 
     async exec(containerName, cmd) {

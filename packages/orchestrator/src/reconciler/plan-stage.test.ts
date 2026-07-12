@@ -204,4 +204,53 @@ describe("PLAN stage", () => {
 
     expect((renderArgs as { cert?: unknown }).cert).toBeUndefined();
   });
+
+  it("merges framework.spec.network.macvlan.parent into network.plan's args when a macvlan provider is bound (T5.2)", async () => {
+    const desiredState: DesiredState = {
+      framework: {
+        kind: "Framework",
+        id: "framework",
+        spec: {
+          domain: "example.tld",
+          deploymentMode: "subdomain",
+          acmeEmail: "ops@example.tld",
+          roles: { networkProvider: "network-macvlan", proxyEngine: "proxy-caddy" },
+          network: { lanInterface: "eth0", macvlan: { parent: "eth0", reservedCidr: "192.168.1.240/29", gateway: "192.168.1.241" } },
+        },
+        schemaVersion: 1,
+        sourcePath: "framework.json",
+      },
+      services: new Map(),
+      pluginConfigs: new Map(),
+      errors: [],
+    };
+    let planArgs: unknown;
+    const invoker: PluginInvoker = async (pluginId, task, args) => {
+      if (task === "network.plan") planArgs = args;
+      return { ok: true, result: {} };
+    };
+    const stage = buildPlanStage({ invokePlugin: invoker });
+    await stage.run({ desiredState });
+
+    expect(planArgs).toEqual({ purpose: "shared-proxy", ports: [443, 80], stableAddress: true, parent: "eth0" });
+  });
+
+  it("does not add a parent field to network.plan's args when there is no macvlan config (bridge provider)", async () => {
+    const desiredState: DesiredState = {
+      framework: frameworkDoc(),
+      services: new Map(),
+      pluginConfigs: new Map(),
+      errors: [],
+    };
+    let planArgs: unknown;
+    const invoker: PluginInvoker = async (pluginId, task, args) => {
+      if (task === "network.plan") planArgs = args;
+      return { ok: true, result: {} };
+    };
+    const stage = buildPlanStage({ invokePlugin: invoker });
+    await stage.run({ desiredState });
+
+    expect(planArgs).toEqual({ purpose: "shared-proxy", ports: [443, 80], stableAddress: true });
+    expect(planArgs).not.toHaveProperty("parent");
+  });
 });

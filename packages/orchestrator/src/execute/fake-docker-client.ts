@@ -92,6 +92,10 @@ export class FakeDockerClient implements DockerClient {
     this.volumes.delete(name);
   }
 
+  async probeMacvlan(parent: string) {
+    return { ok: true, reason: undefined };
+  }
+
   /** Adds an unlabeled bystander container -- used to prove GC never touches non-wanfw-managed objects. */
   addBystanderContainer(name: string): void {
     this.containers.set(name, { id: `bystander-${this.nextId++}`, name, labels: {}, networks: [], state: "running" });

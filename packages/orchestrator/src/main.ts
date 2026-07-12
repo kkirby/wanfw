@@ -195,6 +195,7 @@ const hostApiDispatch = buildHostApiDispatcher({
   rolesHolder,
   pluginInvoker,
   onCertChange: () => void reconcileEngine.trigger("cert-store"),
+  probeNetwork: (mode, parent) => dockerClient.probeMacvlan(parent),
 });
 const pluginServer = listenPluginSocket(
   paths.pluginSocketPath,

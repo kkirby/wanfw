@@ -18,7 +18,11 @@ describe("buildHostApiDispatcher", () => {
     dirs.splice(0).forEach((d) => rmSync(d, { recursive: true, force: true }));
   });
 
-  function freshDispatcher(options?: { roles?: Record<string, string>; pluginInvoker?: PluginInvoker }) {
+  function freshDispatcher(options?: {
+    roles?: Record<string, string>;
+    pluginInvoker?: PluginInvoker;
+    probeNetwork?: (mode: "macvlan", parent: string) => Promise<{ ok: boolean; reason?: string }>;
+  }) {
     const dir = mkdtempSync(join(tmpdir(), "wanfw-hostapi-"));
     dirs.push(dir);
     const secretsDir = mkdtempSync(join(tmpdir(), "wanfw-secrets-"));
@@ -31,7 +35,16 @@ describe("buildHostApiDispatcher", () => {
     stores.push(store);
     const rolesHolder: FrameworkRolesHolder = { roles: options?.roles ?? {} };
     const pluginInvoker: PluginInvoker = options?.pluginInvoker ?? (async () => ({ ok: true, result: {} }));
-    const dispatch = buildHostApiDispatcher({ store, log: createLogger("test"), secretsDir, certsDir, bundlesDir, rolesHolder, pluginInvoker });
+    const dispatch = buildHostApiDispatcher({
+      store,
+      log: createLogger("test"),
+      secretsDir,
+      certsDir,
+      bundlesDir,
+      rolesHolder,
+      pluginInvoker,
+      probeNetwork: options?.probeNetwork,
+    });
     return { dispatch, store, secretsDir, certsDir, bundlesDir, rolesHolder };
   }
 
@@ -426,6 +439,49 @@ describe("buildHostApiDispatcher", () => {
       await expect(
         dispatch({ invocationId: "i2", pluginId: "network-macvlan", method: "ipam.allocate", args: { rangeId: "tiny" } }),
       ).rejects.toThrow(/no free addresses/);
+    });
+  });
+
+  describe("net.probeNetwork (T5.2)", () => {
+    it("forwards to the injected probeNetwork for a trusted network-provider plugin, and returns its result verbatim", async () => {
+      const { dispatch, store, bundlesDir } = freshDispatcher({
+        probeNetwork: async (mode, parent) => {
+          expect(mode).toBe("macvlan");
+          expect(parent).toBe("eth0");
+          return { ok: true };
+        },
+      });
+      trustAsType(store, bundlesDir, "network-macvlan", ["network-provider"]);
+
+      const res = await dispatch({ invocationId: "i1", pluginId: "network-macvlan", method: "net.probeNetwork", args: { mode: "macvlan", parent: "eth0" } });
+      expect(res).toEqual({ ok: true });
+    });
+
+    it("passes a decline reason through unchanged", async () => {
+      const { dispatch, store, bundlesDir } = freshDispatcher({
+        probeNetwork: async () => ({ ok: false, reason: "daemon says no" }),
+      });
+      trustAsType(store, bundlesDir, "network-macvlan", ["network-provider"]);
+
+      const res = await dispatch({ invocationId: "i1", pluginId: "network-macvlan", method: "net.probeNetwork", args: { mode: "macvlan", parent: "eth0" } });
+      expect(res).toEqual({ ok: false, reason: "daemon says no" });
+    });
+
+    it("denies a plugin that isn't a trusted network-provider type", async () => {
+      const { dispatch, store, bundlesDir } = freshDispatcher({ probeNetwork: async () => ({ ok: true }) });
+      trustAsType(store, bundlesDir, "dns-namecheap", ["dns-provider"]);
+
+      await expect(
+        dispatch({ invocationId: "i1", pluginId: "dns-namecheap", method: "net.probeNetwork", args: { mode: "macvlan", parent: "eth0" } }),
+      ).rejects.toThrow(CapabilityError);
+    });
+
+    it("returns a graceful decline (not a crash) when no probeNetwork implementation was ever injected", async () => {
+      const { dispatch, store, bundlesDir } = freshDispatcher();
+      trustAsType(store, bundlesDir, "network-macvlan", ["network-provider"]);
+
+      const res = await dispatch({ invocationId: "i1", pluginId: "network-macvlan", method: "net.probeNetwork", args: { mode: "macvlan", parent: "eth0" } });
+      expect(res).toEqual({ ok: false, reason: "network probing is unavailable in this environment" });
     });
   });
 });
