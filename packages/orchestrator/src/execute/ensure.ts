@@ -1,5 +1,5 @@
 import type { ContainerSpec, MountSpec } from "../validate/index.js";
-import type { CreateContainerOptions, DockerClient } from "./docker-client.js";
+import type { CreateContainerOptions, DockerClient, NetworkDriverOptions } from "./docker-client.js";
 import { computeConfigHash, computeNetworkConfigHash, computeVolumeConfigHash } from "./confighash.js";
 import { MANAGED_LABEL } from "./docker-client.js";
 
@@ -18,6 +18,7 @@ export async function ensureNetwork(
   docker: DockerClient,
   name: string,
   labels: { service?: string; plan: string; core?: boolean },
+  driverOptions?: NetworkDriverOptions,
 ): Promise<StepResult> {
   const existing = await docker.findManagedNetworkByName(name);
   const confighash = computeNetworkConfigHash(name);
@@ -32,6 +33,7 @@ export async function ensureNetwork(
       ...(labels.service ? { "wanfw.service": labels.service } : {}),
       ...(labels.core ? { "wanfw.core": "true" } : {}),
     }),
+    driverOptions,
   );
   return { step: `ensureNetwork:${name}`, changed: true, detail: "created" };
 }

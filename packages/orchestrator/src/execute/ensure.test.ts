@@ -13,6 +13,28 @@ describe("ensure primitives (§7 EXECUTE, ADR-9)", () => {
     expect(docker.networks.size).toBe(1);
   });
 
+  it("ensureNetwork forwards driver options (macvlan driver/parent/subnet/gateway) through to createNetwork (real-hardware fix)", async () => {
+    const docker = new FakeDockerClient();
+    await ensureNetwork(
+      docker,
+      "wanfw_exposure",
+      { plan: "p1", core: true },
+      { driver: "macvlan", parent: "eth0", subnet: "192.168.1.240/29", gateway: "192.168.1.241" },
+    );
+    expect(docker.networkDriverOptions.get("wanfw_exposure")).toEqual({
+      driver: "macvlan",
+      parent: "eth0",
+      subnet: "192.168.1.240/29",
+      gateway: "192.168.1.241",
+    });
+  });
+
+  it("ensureNetwork with no driver options recorded at all defaults to bridge (unchanged pre-fix behavior)", async () => {
+    const docker = new FakeDockerClient();
+    await ensureNetwork(docker, "wanfw_svc_jellyfin", { service: "jellyfin", plan: "p1" });
+    expect(docker.networkDriverOptions.has("wanfw_svc_jellyfin")).toBe(false);
+  });
+
   it("ensureVolume creates once, preserves data (never recreated) on later calls", async () => {
     const docker = new FakeDockerClient();
     const first = await ensureVolume(docker, "wanfw_jellyfin_config", { service: "jellyfin", plan: "p1" });

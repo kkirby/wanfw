@@ -88,20 +88,25 @@ export function buildPlanStage(deps: PlanStageDeps): NamedStage {
 
       const networkProviderId = roles.networkProvider;
       if (networkProviderId) {
-        // `parent` rides alongside the ADR-1-typed EndpointRequest fields
-        // for a macvlan provider (T5.2): `EndpointRequest` itself is
-        // deliberately provider-agnostic (no macvlan-specific field), so
-        // this is a structural superset a bridge-type provider simply
-        // ignores, sourced from framework.spec.network.macvlan.parent --
-        // core's own schema, not a plugin-specific config anchor, since
-        // the parent interface is core-relevant (IPAM range sync,
-        // T5.1's own core-stages.ts load-time sync, reads the same field).
-        const macvlan = (desiredState.framework.spec.network as { macvlan?: { parent?: string } } | undefined)?.macvlan;
+        // `parent`/`reservedCidr`/`gateway` ride alongside the ADR-1-typed
+        // EndpointRequest fields for a macvlan provider (T5.2, extended by
+        // the real-hardware fix that gave the exposure network's own
+        // DockerNetworkSpec real IPAM data to work with): `EndpointRequest`
+        // itself is deliberately provider-agnostic, so this is a
+        // structural superset a bridge-type provider simply ignores,
+        // sourced from framework.spec.network.macvlan -- core's own
+        // schema, not a plugin-specific config anchor, since this is the
+        // exact same field T5.1's core-stages.ts load-time ipam sync reads.
+        const macvlan = (
+          desiredState.framework.spec.network as { macvlan?: { parent?: string; reservedCidr?: string; gateway?: string } } | undefined
+        )?.macvlan;
         const res = await deps.invokePlugin(networkProviderId, "network.plan", {
           purpose: "shared-proxy",
           ports: [443, 80],
           stableAddress: true,
           ...(macvlan?.parent ? { parent: macvlan.parent } : {}),
+          ...(macvlan?.reservedCidr ? { reservedCidr: macvlan.reservedCidr } : {}),
+          ...(macvlan?.gateway ? { gateway: macvlan.gateway } : {}),
         });
         if (!res.ok) {
           return {

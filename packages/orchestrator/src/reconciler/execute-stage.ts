@@ -8,7 +8,13 @@ import type { GatedService } from "./gate-stage.js";
 import type { DockerClient } from "../execute/docker-client.js";
 import { ensureNetwork, ensureVolume, ensureContainer, connect, type StepResult } from "../execute/ensure.js";
 import { writeProxyConfigAndReload } from "../execute/proxy.js";
-import { buildProxyContainerSpec, proxyNetworksFrom, PROXY_CONTAINER_NAME, type NetworkPlanLike } from "../execute/proxy-container.js";
+import {
+  buildProxyContainerSpec,
+  proxyNetworksFrom,
+  exposureNetworkDriverOptions,
+  PROXY_CONTAINER_NAME,
+  type NetworkPlanLike,
+} from "../execute/proxy-container.js";
 
 export interface ExecuteStageDeps {
   store: StateStore;
@@ -115,7 +121,12 @@ export function buildExecuteStage(deps: ExecuteStageDeps): NamedStage {
         );
         if (exposureNetwork) {
           try {
-            const exposureNetResult = await ensureNetwork(deps.docker, exposureNetwork, { plan: planId, core: true });
+            const exposureNetResult = await ensureNetwork(
+              deps.docker,
+              exposureNetwork,
+              { plan: planId, core: true },
+              exposureNetworkDriverOptions(networkPlan, exposureNetwork),
+            );
             journal(exposureNetResult.step, {}, exposureNetResult);
 
             const proxySpec = buildProxyContainerSpec(

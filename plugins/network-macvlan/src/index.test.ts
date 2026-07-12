@@ -46,16 +46,30 @@ describe("network-macvlan plugin (§8.4, ADR-1)", () => {
 
   describe("plan", () => {
     it("builds a macvlan NetworkPlan with the allocated static IP, dedicatedL2/hostIsolated/hairpinCaveat all true", async () => {
-      const plan = await planTask({ purpose: "shared-proxy", ports: [443, 80], stableAddress: true }, "eth0", async () => "192.168.1.242");
+      const plan = await planTask(
+        { purpose: "shared-proxy", ports: [443, 80], stableAddress: true },
+        "eth0",
+        "192.168.1.240/29",
+        "192.168.1.241",
+        async () => "192.168.1.242",
+      );
 
-      expect(plan.resources).toEqual([{ name: "wanfw_exposure", driver: "macvlan", parent: "eth0" }]);
+      expect(plan.resources).toEqual([
+        { name: "wanfw_exposure", driver: "macvlan", parent: "eth0", ipamSubnet: "192.168.1.240/29", ipamGateway: "192.168.1.241" },
+      ]);
       expect(plan.attachment).toEqual({ network: "wanfw_exposure", ip: "192.168.1.242" });
       expect(plan.endpoint).toEqual({ kind: "dedicated-ip", ip: "192.168.1.242" });
       expect(plan.properties).toEqual({ hostIsolated: true, dedicatedL2: true, hairpinCaveat: true });
     });
 
     it("operatorInstructions names the exact forward target and the hairpin shim recipe (§8.4)", async () => {
-      const plan = await planTask({ purpose: "shared-proxy", ports: [443, 80], stableAddress: true }, "eth0", async () => "192.168.1.242");
+      const plan = await planTask(
+        { purpose: "shared-proxy", ports: [443, 80], stableAddress: true },
+        "eth0",
+        "192.168.1.240/29",
+        "192.168.1.241",
+        async () => "192.168.1.242",
+      );
 
       expect(plan.operatorInstructions).toContain("forward WAN:443 -> 192.168.1.242:443");
       expect(plan.operatorInstructions).toContain("ip link add");
@@ -65,10 +79,16 @@ describe("network-macvlan plugin (§8.4, ADR-1)", () => {
 
     it("calls allocateIp exactly once and uses its result throughout the plan", async () => {
       let calls = 0;
-      const plan = await planTask({ purpose: "shared-proxy", ports: [443], stableAddress: true }, "wlan0", async () => {
-        calls += 1;
-        return "10.0.5.5";
-      });
+      const plan = await planTask(
+        { purpose: "shared-proxy", ports: [443], stableAddress: true },
+        "wlan0",
+        "10.0.5.0/29",
+        "10.0.5.1",
+        async () => {
+          calls += 1;
+          return "10.0.5.5";
+        },
+      );
       expect(calls).toBe(1);
       expect(plan.attachment.ip).toBe("10.0.5.5");
       expect(plan.endpoint.ip).toBe("10.0.5.5");

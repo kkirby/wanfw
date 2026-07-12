@@ -4,11 +4,13 @@ import type {
   DockerContainerInfo,
   DockerNetworkInfo,
   DockerVolumeInfo,
+  NetworkDriverOptions,
 } from "./docker-client.js";
 
 /** In-memory fake for unit-testing ensure.ts primitives without a live Docker daemon. */
 export class FakeDockerClient implements DockerClient {
   networks = new Map<string, DockerNetworkInfo>();
+  networkDriverOptions = new Map<string, NetworkDriverOptions>();
   volumes = new Map<string, DockerVolumeInfo>();
   containers = new Map<string, DockerContainerInfo>();
   execCalls: Array<{ containerName: string; cmd: string[] }> = [];
@@ -19,9 +21,10 @@ export class FakeDockerClient implements DockerClient {
     return this.networks.get(name);
   }
 
-  async createNetwork(name: string, labels: Record<string, string>) {
+  async createNetwork(name: string, labels: Record<string, string>, driverOptions?: NetworkDriverOptions) {
     const info = { id: `net-${this.nextId++}`, name, labels };
     this.networks.set(name, info);
+    if (driverOptions) this.networkDriverOptions.set(name, driverOptions);
     return info;
   }
 

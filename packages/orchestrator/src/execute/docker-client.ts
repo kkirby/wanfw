@@ -47,9 +47,29 @@ export interface CreateContainerOptions {
   primaryNetwork?: string;
 }
 
+export interface NetworkDriverOptions {
+  driver?: string;
+  parent?: string;
+  /** wanfw's own reserved CIDR slice (§8.4) -- applied as the Docker network's `IPRange`, not its `Subnet`; see `containingSlash24`'s own comment for why. */
+  subnet?: string;
+  gateway?: string;
+}
+
 export interface DockerClient {
   findManagedNetworkByName(name: string): Promise<DockerNetworkInfo | undefined>;
-  createNetwork(name: string, labels: Record<string, string>): Promise<DockerNetworkInfo>;
+  /**
+   * `driverOptions` (T5.2/T5.5 real-hardware fix): omitted for the common
+   * case (every `wanfw_svc_<id>` network, and any provider's exposure
+   * network before this fix existed) and Docker defaults to `bridge`.
+   * `network-macvlan`'s plan carries its own `driver: "macvlan"` +
+   * `parent` + the reserved range's subnet/gateway -- found missing
+   * entirely by live verification against real hardware with a real
+   * VLAN: this method never read or forwarded any of that, so the
+   * exposure network silently came up as an ordinary bridge network even
+   * when macvlan was the bound provider and every other macvlan check
+   * (T5.2's probe, T5.4's doctor) was passing.
+   */
+  createNetwork(name: string, labels: Record<string, string>, driverOptions?: NetworkDriverOptions): Promise<DockerNetworkInfo>;
 
   findManagedVolumeByName(name: string): Promise<DockerVolumeInfo | undefined>;
   createVolume(name: string, labels: Record<string, string>): Promise<DockerVolumeInfo>;
@@ -87,6 +107,31 @@ export interface DockerClient {
 
 const MANAGED_LABEL = "wanfw.managed";
 
+/**
+ * The /24 containing `gateway` (e.g. `10.0.5.1` -> `10.0.5.0/24`). Docker's
+ * real macvlan driver requires the network's own `Gateway` to fall inside
+ * its declared `Subnet` -- found live against real hardware: wanfw's own
+ * "reserved CIDR slice outside the DHCP pool" (e.g. `10.0.5.240/29`,
+ * §8.4's own wording) *never* contains the real LAN gateway by
+ * construction (the whole point of reserving a slice is that it's a small
+ * range away from where DHCP and the gateway already live), so declaring
+ * that slice directly as `Subnet` is rejected outright by the daemon
+ * (`invalid gateway ...: parent subnet ... doesn't contain this address`).
+ * The correct shape is the network's `Subnet` = the real LAN's full /24,
+ * `Gateway` = the real gateway, and the reserved slice expressed via
+ * `IPRange` instead -- which restricts Docker's own address allocation to
+ * just that slice without changing what the network itself spans.
+ * Assumes a /24 LAN, true for the overwhelming majority of home/small-
+ * business networks (and the wizard's own prompt example, `192.168.1.x`,
+ * assumes the same) -- a real limitation for anyone running a differently-
+ * sized LAN, but not one this fix needs to solve to be a real improvement
+ * over "never actually creates a macvlan network at all."
+ */
+function containingSlash24(ip: string): string {
+  const octets = ip.split(".");
+  return `${octets[0]}.${octets[1]}.${octets[2]}.0/24`;
+}
+
 export function buildRealDockerClient(socketPath?: string): DockerClient {
   const docker = socketPath ? new Docker({ socketPath }) : new Docker();
 
@@ -98,8 +143,18 @@ export function buildRealDockerClient(socketPath?: string): DockerClient {
       return { id: match.Id, name: match.Name, labels: match.Labels ?? {} };
     },
 
-    async createNetwork(name, labels) {
-      const created = await docker.createNetwork({ Name: name, Labels: labels, CheckDuplicate: true });
+    async createNetwork(name, labels, driverOptions) {
+      const created = await docker.createNetwork({
+        Name: name,
+        Labels: labels,
+        CheckDuplicate: true,
+        Driver: driverOptions?.driver,
+        Options: driverOptions?.parent ? { parent: driverOptions.parent } : undefined,
+        IPAM:
+          driverOptions?.subnet && driverOptions?.gateway
+            ? { Config: [{ Subnet: containingSlash24(driverOptions.gateway), Gateway: driverOptions.gateway, IPRange: driverOptions.subnet }] }
+            : undefined,
+      });
       return { id: created.id, name, labels };
     },
 

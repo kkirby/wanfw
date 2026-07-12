@@ -41,6 +41,9 @@ export interface DockerNetworkSpec {
   name: string;
   driver: "macvlan";
   parent: string;
+  /** The reserved range's own subnet/gateway (T5.1's `framework.spec.network.macvlan`), required by Docker's real macvlan driver -- found missing entirely by live verification against real hardware: without these, EXECUTE had nothing but a bare `driver`/`parent` to create the network with, and Docker's API accepted that silently by falling back to an ordinary bridge network instead of erroring. */
+  ipamSubnet: string;
+  ipamGateway: string;
 }
 
 export interface NetworkPlan {

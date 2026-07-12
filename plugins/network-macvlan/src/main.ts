@@ -48,15 +48,19 @@ rl.on("line", (line) => {
         return;
       }
       if (msg.method === "network.plan") {
-        // `parent` rides alongside the ADR-1-typed EndpointRequest fields
-        // in the same flat args object (PLAN stage merges it in from
-        // `framework.spec.network.macvlan.parent`, since ADR-1's own
-        // `EndpointRequest` interface is deliberately provider-agnostic
-        // and has no macvlan-specific field) -- not a wrapper object, so
-        // this stays a structural superset of what `network-bridge`
-        // receives, not a divergent shape.
-        const { parent, ...req } = msg.params as EndpointRequest & { parent: string };
-        const result = await planTask(req, parent, async () => {
+        // `parent`/`reservedCidr`/`gateway` ride alongside the ADR-1-typed
+        // EndpointRequest fields in the same flat args object (PLAN stage
+        // merges them in from `framework.spec.network.macvlan`, since
+        // ADR-1's own `EndpointRequest` interface is deliberately
+        // provider-agnostic) -- not a wrapper object, so this stays a
+        // structural superset of what `network-bridge` receives, not a
+        // divergent shape.
+        const { parent, reservedCidr, gateway, ...req } = msg.params as EndpointRequest & {
+          parent: string;
+          reservedCidr: string;
+          gateway: string;
+        };
+        const result = await planTask(req, parent, reservedCidr, gateway, async () => {
           const res = (await callHost("ipam.allocate", { rangeId: "macvlan" })) as { ip: string };
           return res.ip;
         });

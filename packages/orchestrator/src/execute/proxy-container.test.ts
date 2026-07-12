@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildProxyContainerSpec, proxyNetworksFrom } from "./proxy-container.js";
+import { buildProxyContainerSpec, proxyNetworksFrom, exposureNetworkDriverOptions } from "./proxy-container.js";
 
 describe("proxy-container (§8.4, ADR-9 core-emitted proxy)", () => {
   it("derives the exposure network, per-service networks, and host ports from a network-bridge-shaped NetworkPlan", () => {
@@ -42,5 +42,34 @@ describe("proxy-container (§8.4, ADR-9 core-emitted proxy)", () => {
       { type: "volume", source: "some-other-certs-vol", target: "/data/certs", readOnly: true },
       { type: "volume", source: "some-other-proxycfg-vol", target: "/etc/caddy", readOnly: true },
     ]);
+  });
+
+  describe("exposureNetworkDriverOptions (real-hardware macvlan fix)", () => {
+    it("pulls macvlan's driver/parent/subnet/gateway out of the plan's resources list by name", () => {
+      const networkPlan = {
+        resources: [{ name: "wanfw_exposure", driver: "macvlan", parent: "eth0", ipamSubnet: "192.168.1.240/29", ipamGateway: "192.168.1.241" }],
+        attachment: { network: "wanfw_exposure" },
+      };
+      expect(exposureNetworkDriverOptions(networkPlan, "wanfw_exposure")).toEqual({
+        driver: "macvlan",
+        parent: "eth0",
+        subnet: "192.168.1.240/29",
+        gateway: "192.168.1.241",
+      });
+    });
+
+    it("returns undefined for a bridge-shaped plan with no resources entry -- Docker defaults to bridge, unchanged from before this fix", () => {
+      const networkPlan = { attachment: { network: "wanfw_exposure" } };
+      expect(exposureNetworkDriverOptions(networkPlan, "wanfw_exposure")).toBeUndefined();
+    });
+
+    it("returns undefined when there is no exposure network name at all", () => {
+      expect(exposureNetworkDriverOptions(undefined, undefined)).toBeUndefined();
+    });
+
+    it("returns undefined when the resources list doesn't contain a matching name", () => {
+      const networkPlan = { resources: [{ name: "some-other-network", driver: "macvlan" }] };
+      expect(exposureNetworkDriverOptions(networkPlan, "wanfw_exposure")).toBeUndefined();
+    });
   });
 });

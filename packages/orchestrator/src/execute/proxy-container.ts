@@ -6,6 +6,8 @@ const PROXY_IMAGE = "caddy:2"; // TODO(T6.3): pin digest
 export interface NetworkPlanLike {
   attachment?: { network?: string };
   endpoint?: { kind?: string; ports?: Array<{ hostPort: number }> };
+  /** T5.2/T5.5 real-hardware fix: the provider's own declared network resources (driver, parent interface, IPAM subnet/gateway for macvlan) -- previously present in the plan but never actually read by EXECUTE, so the exposure network always came up as an ordinary bridge network regardless of the bound provider. */
+  resources?: Array<{ name: string; driver?: string; parent?: string; ipamSubnet?: string; ipamGateway?: string }>;
 }
 
 /**
@@ -48,6 +50,17 @@ export function buildProxyContainerSpec(
     networks: [exposureNetwork, ...serviceNetworks],
     restart: "unless-stopped",
   };
+}
+
+/** Pulls the exposure network's own driver options (macvlan's `driver`/`parent`/subnet/gateway, or undefined for bridge, which lets Docker default to `bridge` exactly as before this fix) out of the plan's `resources` list by name. */
+export function exposureNetworkDriverOptions(
+  networkPlan: NetworkPlanLike | undefined,
+  exposureNetwork: string | undefined,
+): { driver?: string; parent?: string; subnet?: string; gateway?: string } | undefined {
+  if (!exposureNetwork) return undefined;
+  const resource = networkPlan?.resources?.find((r) => r.name === exposureNetwork);
+  if (!resource) return undefined;
+  return { driver: resource.driver, parent: resource.parent, subnet: resource.ipamSubnet, gateway: resource.ipamGateway };
 }
 
 export function proxyNetworksFrom(networkPlan: NetworkPlanLike | undefined, serviceIds: string[]): {

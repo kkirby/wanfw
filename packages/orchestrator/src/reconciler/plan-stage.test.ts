@@ -205,7 +205,7 @@ describe("PLAN stage", () => {
     expect((renderArgs as { cert?: unknown }).cert).toBeUndefined();
   });
 
-  it("merges framework.spec.network.macvlan.parent into network.plan's args when a macvlan provider is bound (T5.2)", async () => {
+  it("merges framework.spec.network.macvlan.{parent,reservedCidr,gateway} into network.plan's args when a macvlan provider is bound (T5.2)", async () => {
     const desiredState: DesiredState = {
       framework: {
         kind: "Framework",
@@ -232,7 +232,14 @@ describe("PLAN stage", () => {
     const stage = buildPlanStage({ invokePlugin: invoker });
     await stage.run({ desiredState });
 
-    expect(planArgs).toEqual({ purpose: "shared-proxy", ports: [443, 80], stableAddress: true, parent: "eth0" });
+    expect(planArgs).toEqual({
+      purpose: "shared-proxy",
+      ports: [443, 80],
+      stableAddress: true,
+      parent: "eth0",
+      reservedCidr: "192.168.1.240/29",
+      gateway: "192.168.1.241",
+    });
   });
 
   it("does not add a parent field to network.plan's args when there is no macvlan config (bridge provider)", async () => {

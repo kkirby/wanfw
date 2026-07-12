@@ -16,10 +16,16 @@ const EXPOSURE_NETWORK = "wanfw_exposure";
  * checks run over `wanfw_svc_*` networks rather than the exposure IP,
  * per §8.4).
  */
-export async function planTask(req: EndpointRequest, parent: string, allocateIp: () => Promise<string>): Promise<NetworkPlan> {
+export async function planTask(
+  req: EndpointRequest,
+  parent: string,
+  reservedCidr: string,
+  gateway: string,
+  allocateIp: () => Promise<string>,
+): Promise<NetworkPlan> {
   const ip = await allocateIp();
   return {
-    resources: [{ name: EXPOSURE_NETWORK, driver: "macvlan", parent }],
+    resources: [{ name: EXPOSURE_NETWORK, driver: "macvlan", parent, ipamSubnet: reservedCidr, ipamGateway: gateway }],
     attachment: { network: EXPOSURE_NETWORK, ip },
     endpoint: { kind: "dedicated-ip", ip },
     properties: { hostIsolated: true, dedicatedL2: true, hairpinCaveat: true },
