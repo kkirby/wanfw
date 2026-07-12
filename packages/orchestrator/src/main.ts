@@ -12,9 +12,9 @@ import { AuditLog } from "./audit-log.js";
 import { listenPluginSocket } from "./plugin-socket.js";
 import type { JsonRpcConnection } from "@wanfw/pluginhost";
 import { buildHostApiDispatcher } from "./host-api/index.js";
-import { loadDesiredState, watchDesiredState, type DesiredState } from "./desired-state/index.js";
+import { watchDesiredState } from "./desired-state/index.js";
 import { publishComposedSchema } from "./composed-schema/index.js";
-import { resolveDependencies, type FrameworkSpec } from "./dependency-resolution/index.js";
+import { ReconcileEngine, buildLoadStage, buildResolveStage, buildPlaceholderStage } from "./reconciler/index.js";
 
 const log = createLogger("orchestrator");
 const paths = resolvePaths();
@@ -48,47 +48,38 @@ const nudgeState: NudgeState = { nudgedAt: null, count: 0 };
 
 const heartbeat = startHeartbeat(paths.statusDir, heartbeatState);
 
-// Reconciler (T3.4) will replace this with the real PLAN->VALIDATE->GATE->
-// EXECUTE->OBSERVE pipeline; for now the loader is exercised end-to-end so
-// desired-state changes are visibly picked up and validation errors surface
-// in the logs, with the latest snapshot held for later stages to consume.
-let latestDesiredState: DesiredState = { services: new Map(), pluginConfigs: new Map(), errors: [] };
+// Reconcile engine (T3.4): level-triggered, single-flight, coalescing.
+// load/resolve are real (T3.1/T3.3); PLAN/VALIDATE/GATE/EXECUTE/OBSERVE are
+// placeholders until T3.5-T3.9 land, so the full pipeline shape is already
+// real and observable end to end.
+const reconcileEngine = new ReconcileEngine({
+  stages: [
+    buildLoadStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore }),
+    buildResolveStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore }),
+    buildPlaceholderStage("plan"),
+    buildPlaceholderStage("validate"),
+    buildPlaceholderStage("gate"),
+    buildPlaceholderStage("execute"),
+    buildPlaceholderStage("observe"),
+  ],
+  log,
+  onOutcome: (outcome) => {
+    heartbeatState.current = {
+      phase: outcome.phase,
+      ts: outcome.completedAt,
+      version: heartbeatState.current.version,
+      lastError: outcome.lastError, // cleared (undefined) on a successful outcome, not carried over
+    };
+  },
+});
 
-async function reloadDesiredState(): Promise<void> {
-  try {
-    latestDesiredState = await loadDesiredState(paths.desiredDir);
-    if (latestDesiredState.errors.length > 0) {
-      log.warn("desired-state reload found document errors", {
-        errors: latestDesiredState.errors,
-      });
-    } else {
-      log.info("desired-state reloaded", {
-        hasFramework: latestDesiredState.framework !== undefined,
-        serviceCount: latestDesiredState.services.size,
-        pluginConfigCount: latestDesiredState.pluginConfigs.size,
-      });
-    }
+const desiredStateWatcher = watchDesiredState(paths.desiredDir, () => void reconcileEngine.trigger("desired-state-change"));
+await reconcileEngine.trigger("boot");
 
-    // Reconciler (T3.4) will gate PLAN on this; for now dependency
-    // resolution runs and surfaces config-time errors in the logs whenever
-    // a framework document is present, exercising T3.3 end-to-end.
-    if (latestDesiredState.framework) {
-      const resolution = await resolveDependencies(
-        stateStore,
-        paths.bundlesDir,
-        latestDesiredState.framework.spec as FrameworkSpec,
-      );
-      if (!resolution.ok) {
-        log.warn("dependency resolution failed", { errors: resolution.errors });
-      }
-    }
-  } catch (err) {
-    log.error("desired-state reload failed", { message: (err as Error).message });
-  }
-}
-
-const desiredStateWatcher = watchDesiredState(paths.desiredDir, () => void reloadDesiredState());
-await reloadDesiredState();
+// 60s timer trigger (§7): catches drift the watcher might miss (e.g. some
+// mount types don't propagate inotify events reliably) and will eventually
+// pick up cert-renewal-adjacent time-based conditions once T4.6 exists.
+const timerTrigger = setInterval(() => void reconcileEngine.trigger("timer"), 60_000);
 
 await publishComposedSchema(stateStore, paths.bundlesDir, paths.statusDir);
 log.info("composed schema published", { path: `${paths.statusDir}/schema.json` });
@@ -98,7 +89,7 @@ const statusServer: Server = listenOnUnixSocket(
     store: stateStore,
     stagingDir: paths.stagingDir,
     statusDir: paths.statusDir,
-    onNudge: () => desiredStateWatcher.nudge(),
+    onNudge: () => void reconcileEngine.trigger("nudge"),
   }),
   paths.statusSocketPath,
   0o660,
@@ -140,6 +131,7 @@ log.info("plugin socket listening", { path: paths.pluginSocketPath });
 function shutdown(signal: string): void {
   log.info("shutting down", { signal });
   heartbeat.stop();
+  clearInterval(timerTrigger);
   void desiredStateWatcher.stop();
   statusServer.close();
   adminServer.close();

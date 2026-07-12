@@ -8,6 +8,7 @@ export interface FrameworkStatus {
   phase: FrameworkPhase;
   ts: string;
   version: string;
+  lastError?: { stage: string; plugin?: string; message: string };
 }
 
 export interface HeartbeatState {
