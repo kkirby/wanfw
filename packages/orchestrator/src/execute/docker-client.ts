@@ -31,7 +31,7 @@ export interface CreateContainerOptions {
   cmd?: string[];
   entrypoint?: string[];
   env?: Record<string, string>;
-  binds?: string[]; // "source:target[:ro]"
+  mounts?: Array<{ type: "volume" | "bind"; source: string; target: string; readOnly?: boolean }>;
   devices?: string[];
   networkMode?: string;
   ports?: number[];
@@ -70,12 +70,6 @@ export interface DockerClient {
 }
 
 const MANAGED_LABEL = "wanfw.managed";
-
-function parseBind(bind: string): { source: string; target: string; ro: boolean } {
-  const parts = bind.split(":");
-  const ro = parts[2] === "ro";
-  return { source: parts[0]!, target: parts[1]!, ro };
-}
 
 export function buildRealDockerClient(socketPath?: string): DockerClient {
   const docker = socketPath ? new Docker({ socketPath }) : new Docker();
@@ -122,7 +116,28 @@ export function buildRealDockerClient(socketPath?: string): DockerClient {
     },
 
     async createContainer(options) {
-      const binds = (options.binds ?? []).map((b) => b);
+      const images = await docker.listImages({ filters: JSON.stringify({ reference: [options.image] }) });
+      if (images.length === 0) {
+        await new Promise<void>((resolve, reject) => {
+          docker.pull(options.image, (err: Error | null, stream: NodeJS.ReadableStream) => {
+            if (err) return reject(err);
+            docker.modem.followProgress(stream, (progressErr: Error | null) => (progressErr ? reject(progressErr) : resolve()));
+          });
+        });
+      }
+      // Structured HostConfig.Mounts, not the legacy Binds string array:
+      // Binds is bind-mount-shaped and (contrary to the CLI's `-v` shorthand
+      // translation) does not reliably attach named volumes when driving
+      // the Engine API directly -- discovered live when a "volume" mount
+      // silently produced no external mount at all, leaving the container
+      // seeing its own image layer at that path instead of the shared
+      // volume (T3.12).
+      const mounts = (options.mounts ?? []).map((m) => ({
+        Type: m.type,
+        Source: m.source,
+        Target: m.target,
+        ReadOnly: m.readOnly ?? false,
+      }));
       const container = await docker.createContainer({
         name: options.name,
         Image: options.image,
@@ -135,7 +150,7 @@ export function buildRealDockerClient(socketPath?: string): DockerClient {
           ? Object.fromEntries(options.ports.map((p) => [`${p}/tcp`, {}]))
           : undefined,
         HostConfig: {
-          Binds: binds.length > 0 ? binds : undefined,
+          Mounts: mounts.length > 0 ? mounts : undefined,
           Devices: (options.devices ?? []).map((d) => ({ PathOnHost: d, PathInContainer: d, CgroupPermissions: "rwm" })),
           NetworkMode: options.networkMode ?? options.primaryNetwork,
           PortBindings: options.ports
@@ -219,4 +234,4 @@ export function buildRealDockerClient(socketPath?: string): DockerClient {
   };
 }
 
-export { parseBind, MANAGED_LABEL };
+export { MANAGED_LABEL };

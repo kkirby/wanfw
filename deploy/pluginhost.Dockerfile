@@ -10,7 +10,7 @@ COPY plugins ./plugins
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
-RUN pnpm --filter @wanfw/core-schemas... --filter @wanfw/pluginhost... --filter @wanfw/plugin-sdk... --filter @wanfw/plugin-deploy-docker... --filter @wanfw/plugin-network-bridge... build
+RUN pnpm --filter @wanfw/core-schemas... --filter @wanfw/pluginhost... --filter @wanfw/plugin-sdk... --filter @wanfw/plugin-deploy-docker... --filter @wanfw/plugin-network-bridge... --filter @wanfw/plugin-proxy-caddy... build
 
 FROM base AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends util-linux \
@@ -29,11 +29,13 @@ RUN groupadd --system wanfw && useradd --system --gid wanfw --home-dir /app --sh
 WORKDIR /app
 COPY --from=build /app /app
 RUN mkdir -p /data/bundles /run/wanfw \
-      /app/builtins/deploy-docker/dist /app/builtins/network-bridge/dist \
+      /app/builtins/deploy-docker/dist /app/builtins/network-bridge/dist /app/builtins/proxy-caddy/dist \
     && cp /app/plugins/deploy-docker/manifest.json /app/plugins/deploy-docker/config-schema.json /app/builtins/deploy-docker/ \
     && cp /app/plugins/deploy-docker/dist/main.js /app/plugins/deploy-docker/dist/plan.js /app/builtins/deploy-docker/dist/ \
     && cp /app/plugins/network-bridge/manifest.json /app/builtins/network-bridge/ \
     && cp /app/plugins/network-bridge/dist/main.js /app/plugins/network-bridge/dist/probe.js /app/plugins/network-bridge/dist/plan.js /app/builtins/network-bridge/dist/ \
+    && cp /app/plugins/proxy-caddy/manifest.json /app/builtins/proxy-caddy/ \
+    && cp /app/plugins/proxy-caddy/dist/main.js /app/plugins/proxy-caddy/dist/render.js /app/builtins/proxy-caddy/dist/ \
     && chown -R wanfw:wanfw /data /run/wanfw /app/builtins
 ENV NODE_ENV=production
 ENV WANFW_BUILTINS_DIR=/app/builtins

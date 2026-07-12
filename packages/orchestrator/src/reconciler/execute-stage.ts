@@ -8,6 +8,7 @@ import type { GatedService } from "./gate-stage.js";
 import type { DockerClient } from "../execute/docker-client.js";
 import { ensureNetwork, ensureVolume, ensureContainer, connect, type StepResult } from "../execute/ensure.js";
 import { writeProxyConfigAndReload } from "../execute/proxy.js";
+import { buildProxyContainerSpec, proxyNetworksFrom, PROXY_CONTAINER_NAME, type NetworkPlanLike } from "../execute/proxy-container.js";
 
 export interface ExecuteStageDeps {
   store: StateStore;
@@ -96,6 +97,40 @@ export function buildExecuteStage(deps: ExecuteStageDeps): NamedStage {
           const message = (err as Error).message;
           journal(`error:${serviceId}`, { serviceId }, { error: message });
           return { ok: false, error: { stage: "execute", plugin: serviceId, message } };
+        }
+      }
+
+      // Core-emitted proxy (§8.4, ADR-9): ensure the exposure network and the
+      // managed wanfw-proxy container itself exist, dual-homed onto the
+      // exposure network plus every wanfw_svc_<id> network, before ever
+      // attempting a config write/reload against it.
+      if (planGraph.networkPlan) {
+        const networkPlan = planGraph.networkPlan as NetworkPlanLike;
+        const { exposureNetwork, serviceNetworks, hostPorts } = proxyNetworksFrom(
+          networkPlan,
+          Object.keys(planGraph.servicePlans),
+        );
+        if (exposureNetwork) {
+          try {
+            const exposureNetResult = await ensureNetwork(deps.docker, exposureNetwork, { plan: planId, core: true });
+            journal(exposureNetResult.step, {}, exposureNetResult);
+
+            const proxySpec = buildProxyContainerSpec(exposureNetwork, serviceNetworks, hostPorts);
+            const proxyResult = await ensureContainer(deps.docker, PROXY_CONTAINER_NAME, proxySpec, {
+              plan: planId,
+              core: true,
+            });
+            journal(proxyResult.step, {}, proxyResult);
+
+            for (const networkName of proxySpec.networks ?? []) {
+              const connectResult = await connect(deps.docker, PROXY_CONTAINER_NAME, networkName);
+              journal(connectResult.step, { networkName }, connectResult);
+            }
+          } catch (err) {
+            const message = (err as Error).message;
+            journal("error:proxy-container", {}, { error: message });
+            return { ok: false, error: { stage: "execute", plugin: "proxy", message } };
+          }
         }
       }
 

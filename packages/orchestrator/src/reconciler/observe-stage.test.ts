@@ -106,6 +106,24 @@ describe("OBSERVE stage (T3.9)", () => {
     expect(docker.containers.has("some-other-app")).toBe(true);
   });
 
+  it("a core-authority object (wanfw.core=true, no wanfw.service label -- e.g. the managed proxy, §8.4/ADR-9) survives GC every pass", async () => {
+    const store = await makeStore();
+    const statusDir = await makeStatusDir();
+    const docker = new FakeDockerClient();
+    await ensureNetwork(docker, "wanfw_exposure", { plan: "p0", core: true });
+    await ensureContainer(docker, "wanfw-proxy", { image: "caddy:2" }, { plan: "p0", core: true });
+
+    // No services in desired state at all -- if the proxy were mistakenly
+    // service-scoped it would be GC'd here, since GC only spares objects
+    // whose wanfw.service label matches something in desiredServiceIds.
+    const desiredState: DesiredState = { framework: frameworkDoc(), services: new Map(), pluginConfigs: new Map(), errors: [] };
+    const stage = buildObserveStage({ store, docker, statusDir });
+    await stage.run({ desiredState } as unknown as ReconcileRunContext);
+
+    expect(docker.containers.has("wanfw-proxy")).toBe(true);
+    expect(docker.networks.has("wanfw_exposure")).toBe(true);
+  });
+
   it("a still-desired service is left alone (zero GC) and gets a live status doc", async () => {
     const store = await makeStore();
     const statusDir = await makeStatusDir();

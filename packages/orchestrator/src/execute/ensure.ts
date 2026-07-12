@@ -17,7 +17,7 @@ function baseLabels(extra: Record<string, string>): Record<string, string> {
 export async function ensureNetwork(
   docker: DockerClient,
   name: string,
-  labels: { service?: string; plan: string },
+  labels: { service?: string; plan: string; core?: boolean },
 ): Promise<StepResult> {
   const existing = await docker.findManagedNetworkByName(name);
   const confighash = computeNetworkConfigHash(name);
@@ -30,6 +30,7 @@ export async function ensureNetwork(
       "wanfw.plan": labels.plan,
       "wanfw.confighash": confighash,
       ...(labels.service ? { "wanfw.service": labels.service } : {}),
+      ...(labels.core ? { "wanfw.core": "true" } : {}),
     }),
   );
   return { step: `ensureNetwork:${name}`, changed: true, detail: "created" };
@@ -58,8 +59,8 @@ export async function ensureVolume(
   return { step: `ensureVolume:${name}`, changed: true, detail: "created" };
 }
 
-function bindsFromMounts(mounts: MountSpec[]): string[] {
-  return mounts.map((m) => `${m.source}:${m.target}${m.readOnly ? ":ro" : ""}`);
+function dockerMountsFromSpec(mounts: MountSpec[]): Array<{ type: "volume" | "bind"; source: string; target: string; readOnly?: boolean }> {
+  return mounts.map((m) => ({ type: m.type, source: m.source, target: m.target, readOnly: m.readOnly }));
 }
 
 /**
@@ -73,7 +74,7 @@ export async function ensureContainer(
   docker: DockerClient,
   name: string,
   spec: ContainerSpec,
-  labels: { service: string; plan: string },
+  labels: { service?: string; plan: string; core?: boolean },
 ): Promise<StepResult> {
   const confighash = computeConfigHash(spec);
   const existing = await docker.findManagedContainerByName(name);
@@ -91,7 +92,7 @@ export async function ensureContainer(
     cmd: spec.cmd,
     entrypoint: spec.entrypoint,
     env: spec.env,
-    binds: bindsFromMounts((spec.mounts ?? []).filter((m) => m.type === "bind" || m.type === "volume")),
+    mounts: dockerMountsFromSpec((spec.mounts ?? []).filter((m) => m.type === "bind" || m.type === "volume")),
     devices: spec.devices,
     networkMode: spec.networkMode,
     ports: spec.ports,
@@ -105,9 +106,10 @@ export async function ensureContainer(
     restartPolicy: spec.restart,
     primaryNetwork: spec.networks?.[0],
     labels: baseLabels({
-      "wanfw.service": labels.service,
+      ...(labels.service ? { "wanfw.service": labels.service } : {}),
       "wanfw.plan": labels.plan,
       "wanfw.confighash": confighash,
+      ...(labels.core ? { "wanfw.core": "true" } : {}),
       ...(spec.labels ?? {}),
     }),
   };

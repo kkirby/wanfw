@@ -1,0 +1,10 @@
+{
+  "manifestVersion": 1,
+  "id": "proxy-caddy",
+  "version": "0.1.0",
+  "frameworkApi": "^1.0.0",
+  "types": ["proxy-engine"],
+  "entrypoint": "main.js",
+  "runtime": "node22",
+  "capabilities": []
+}

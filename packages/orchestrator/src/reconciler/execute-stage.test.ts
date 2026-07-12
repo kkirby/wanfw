@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StateStore } from "../state-store/store.js";
@@ -168,5 +168,52 @@ describe("EXECUTE stage (T3.8)", () => {
     const second = await stage.run({ desiredState, planGraph } as unknown as ReconcileRunContext);
     expect(second.ok).toBe(true);
     expect(docker.containers.has("wanfw_jellyfin")).toBe(true);
+  });
+
+  it("provisions the exposure network and the wanfw-proxy container, dual-homed onto the exposure network plus every service network (§8.4)", async () => {
+    const store = await makeStore();
+    const proxycfgDir = await mkdtemp(join(tmpdir(), "wanfw-proxycfg-"));
+    dirs.push(proxycfgDir);
+    const docker = new FakeDockerClient();
+    const desiredState: DesiredState = { framework: frameworkDoc(), services: new Map(), pluginConfigs: new Map(), errors: [] };
+    const planGraph: PlanGraph = {
+      networkPlan: {
+        attachment: { network: "wanfw_exposure" },
+        endpoint: { kind: "host-ports", ports: [{ containerPort: 443, hostPort: 443 }, { containerPort: 80, hostPort: 80 }] },
+      },
+      servicePlans: { jellyfin: { image: "jellyfin/jellyfin:10.9.11" } },
+      routes: [],
+      certRequirements: { mode: "internal-ca", names: [] },
+    };
+    const stage = buildExecuteStage({ store, docker, proxycfgDir });
+    const result = await stage.run({ desiredState, planGraph } as unknown as ReconcileRunContext);
+
+    expect(result.ok).toBe(true);
+    expect(docker.networks.has("wanfw_exposure")).toBe(true);
+    const proxy = docker.containers.get("wanfw-proxy");
+    expect(proxy).toBeDefined();
+    expect(proxy!.networks).toEqual(expect.arrayContaining(["wanfw_exposure", "wanfw_svc_jellyfin"]));
+  });
+
+  it("writes proxy config and reloads only after the proxy container exists (reload path exercised end to end)", async () => {
+    const store = await makeStore();
+    const proxycfgDir = await mkdtemp(join(tmpdir(), "wanfw-proxycfg-"));
+    dirs.push(proxycfgDir);
+    const docker = new FakeDockerClient();
+    const desiredState: DesiredState = { framework: frameworkDoc(), services: new Map(), pluginConfigs: new Map(), errors: [] };
+    const planGraph: PlanGraph = {
+      networkPlan: { attachment: { network: "wanfw_exposure" }, endpoint: { kind: "host-ports", ports: [{ containerPort: 443, hostPort: 443 }] } },
+      servicePlans: { kavita: { image: "kavita/kavita:latest" } },
+      routes: [],
+      proxyRender: { filename: "Caddyfile", content: "kavita.example.tld {\n\treverse_proxy wanfw_kavita:5000\n}\n", reloadCmd: ["caddy", "reload"] },
+      certRequirements: { mode: "internal-ca", names: [] },
+    };
+    const stage = buildExecuteStage({ store, docker, proxycfgDir });
+    const result = await stage.run({ desiredState, planGraph } as unknown as ReconcileRunContext);
+
+    expect(result.ok).toBe(true);
+    expect(docker.execCalls).toEqual([{ containerName: "wanfw-proxy", cmd: ["caddy", "reload"] }]);
+    const written = await readFile(join(proxycfgDir, "Caddyfile"), "utf8");
+    expect(written).toContain("kavita.example.tld");
   });
 });
