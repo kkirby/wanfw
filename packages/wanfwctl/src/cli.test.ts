@@ -336,4 +336,81 @@ describe("wanfwctl-inner CLI", () => {
     expect(code).toBe(EXIT_CODES.ok);
     expect(revokeCalls()).toEqual([{ projectionHash: "abc123" }]);
   });
+
+  async function bootSecretRouter() {
+    const router = new JsonUdsRouter();
+    const setCalls: unknown[] = [];
+    const unsetCalls: unknown[] = [];
+    router.register("GET", "/secrets", async () => ({
+      status: 200,
+      body: { secrets: [{ name: "cert-letsencrypt-dns01/acme-account-key", lastRotated: "2026-01-01T00:00:00.000Z" }] },
+    }));
+    router.register("POST", "/secrets", async ({ body }) => {
+      setCalls.push(body);
+      return { status: 200, body: { name: (body as { name: string }).name, set: true } };
+    });
+    router.register("POST", "/secrets/unset", async ({ body }) => {
+      unsetCalls.push(body);
+      return { status: 200, body: { name: (body as { name: string }).name, unset: true } };
+    });
+    const dir = await mkdtemp(join(tmpdir(), "wanfw-cli-secret-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "admin.sock");
+    servers.push(listenOnUnixSocket(router, socketPath));
+    await new Promise((r) => setTimeout(r, 50));
+    return { socketPath, setCalls: () => setCalls, unsetCalls: () => unsetCalls };
+  }
+
+  it("secret list: prints names and lastRotated, never a value field", async () => {
+    const { socketPath } = await bootSecretRouter();
+    const out = captureOutput();
+    const code = await runCli(["secret", "list"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    const body = JSON.parse(out.lines.join(""));
+    expect(body.secrets).toEqual([{ name: "cert-letsencrypt-dns01/acme-account-key", lastRotated: "2026-01-01T00:00:00.000Z" }]);
+  });
+
+  it("secret set: reads the value from stdin, never argv, and forwards it to the admin socket", async () => {
+    const { socketPath, setCalls } = await bootSecretRouter();
+    const out = captureOutput();
+    const code = await runCli(["secret", "set", "cert-letsencrypt-dns01/acme-account-key"], {
+      adminSocketPath: socketPath,
+      ...out,
+      readStdin: async () => "the-secret-value",
+    });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(setCalls()).toEqual([{ name: "cert-letsencrypt-dns01/acme-account-key", value: "the-secret-value" }]);
+  });
+
+  it("secret set: an extra positional argument (a value on argv) is rejected as a usage error, never reaches the admin socket", async () => {
+    const { socketPath, setCalls } = await bootSecretRouter();
+    const out = captureOutput();
+    const code = await runCli(["secret", "set", "ns/name", "value-on-argv"], {
+      adminSocketPath: socketPath,
+      ...out,
+      readStdin: async () => "irrelevant",
+    });
+    expect(code).toBe(EXIT_CODES.usage);
+    expect(setCalls()).toHaveLength(0);
+  });
+
+  it("secret set: empty stdin is a usage error", async () => {
+    const { socketPath, setCalls } = await bootSecretRouter();
+    const out = captureOutput();
+    const code = await runCli(["secret", "set", "ns/name"], {
+      adminSocketPath: socketPath,
+      ...out,
+      readStdin: async () => "",
+    });
+    expect(code).toBe(EXIT_CODES.usage);
+    expect(setCalls()).toHaveLength(0);
+  });
+
+  it("secret unset: calls the admin socket with the name", async () => {
+    const { socketPath, unsetCalls } = await bootSecretRouter();
+    const out = captureOutput();
+    const code = await runCli(["secret", "unset", "cert-letsencrypt-dns01/acme-account-key"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(unsetCalls()).toEqual([{ name: "cert-letsencrypt-dns01/acme-account-key" }]);
+  });
 });

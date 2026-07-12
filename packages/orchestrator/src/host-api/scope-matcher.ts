@@ -53,6 +53,24 @@ export function matchZone(zones: string[], zone: string): boolean {
   return zones.includes(zone);
 }
 
+/**
+ * Live capability check for a host API call (§12.1, invariant #8): grants
+ * are always the caller's own already-decoded rows loaded fresh from the
+ * store for this specific invocation, never trusted from anything the
+ * plugin process itself claims. Distinct from VALIDATE's own `hasGrant`
+ * twin (validate-plan.ts) -- that one checks an emitted *plan* against
+ * stored grants; this one checks a *live call* a running plugin is making
+ * right now, but the shape is the same: "cap match, then scope predicate."
+ */
+export interface DecodedGrant {
+  cap: string;
+  scope: Record<string, unknown>;
+}
+
+export function hasGrant(grants: DecodedGrant[], cap: string, matches: (scope: Record<string, unknown>) => boolean): boolean {
+  return grants.some((g) => g.cap === cap && matches(g.scope));
+}
+
 export function matchPort(ports: number[], port: number): boolean {
   return ports.includes(port);
 }

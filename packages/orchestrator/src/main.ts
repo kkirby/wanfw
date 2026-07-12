@@ -34,7 +34,7 @@ const paths = resolvePaths();
 // Tolerate a missing framework document: this is pre-init state (T5.3 writes
 // the real framework doc later). Initialize data dirs so a fresh volume boots
 // cleanly.
-for (const dir of [paths.stateDir, paths.statusDir, paths.desiredDir, paths.stagingDir, paths.bundlesDir]) {
+for (const dir of [paths.stateDir, paths.statusDir, paths.desiredDir, paths.stagingDir, paths.bundlesDir, paths.secretsDir]) {
   mkdirSync(dir, { recursive: true });
 }
 
@@ -111,6 +111,7 @@ const statusServer: Server = listenOnUnixSocket(
     store: stateStore,
     stagingDir: paths.stagingDir,
     statusDir: paths.statusDir,
+    secretsDir: paths.secretsDir,
     gateSnapshotHolder,
     onNudge: () => void reconcileEngine.trigger("nudge"),
   }),
@@ -129,6 +130,7 @@ const adminServer: Server = listenOnUnixSocket(
     stagingDir: paths.stagingDir,
     bundlesDir: paths.bundlesDir,
     statusDir: paths.statusDir,
+    secretsDir: paths.secretsDir,
     gateSnapshotHolder,
     onApprovalChange: () => void reconcileEngine.trigger("plan-approve"),
   }),
@@ -137,7 +139,7 @@ const adminServer: Server = listenOnUnixSocket(
 );
 log.info("admin socket listening", { path: paths.adminSocketPath });
 
-const hostApiDispatch = buildHostApiDispatcher(stateStore, log);
+const hostApiDispatch = buildHostApiDispatcher(stateStore, log, paths.secretsDir);
 const pluginServer = listenPluginSocket(
   paths.pluginSocketPath,
   log,

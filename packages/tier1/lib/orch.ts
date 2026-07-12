@@ -142,3 +142,14 @@ export async function listGatedPlans(): Promise<GatedPlan[]> {
   const res = await orchRequest("GET", "/plans");
   return ((res.body as { plans: GatedPlan[] } | undefined)?.plans) ?? [];
 }
+
+export interface SecretListEntry {
+  name: string;
+  lastRotated: string;
+}
+
+/** Names + lastRotated only (§12.4) -- values never traverse tier1 at all; set/unset is CLI-only, same no-mutation-button pattern as approvals (ADR-6). */
+export async function listSecrets(): Promise<SecretListEntry[]> {
+  const res = await orchRequest("GET", "/secrets");
+  return ((res.body as { secrets: SecretListEntry[] } | undefined)?.secrets) ?? [];
+}

@@ -6,6 +6,7 @@ import type { StateStore } from "./state-store/store.js";
 import { listStagedBundles } from "./trust/index.js";
 import { validateDraftDocument, type ComposedSchema } from "./composed-schema/index.js";
 import type { GateSnapshotHolder } from "./reconciler/index.js";
+import { listSecrets } from "./secrets/store.js";
 
 /**
  * Status socket (§2.2): read-only, pure validation, and a nudge. Zero
@@ -32,6 +33,7 @@ export const STATUS_SOCKET_ROUTE_ALLOWLIST: ReadonlyArray<{ method: string; path
   { method: "GET", path: "/plugins/:id" },
   { method: "GET", path: "/plans" },
   { method: "GET", path: "/plans/:id" },
+  { method: "GET", path: "/secrets" },
 ];
 
 export interface NudgeState {
@@ -53,6 +55,7 @@ export function buildStatusSocketRouter(
     store: StateStore;
     stagingDir: string;
     statusDir?: string;
+    secretsDir?: string;
     gateSnapshotHolder?: GateSnapshotHolder;
     onNudge?: () => void;
   },
@@ -166,6 +169,15 @@ export function buildStatusSocketRouter(
     const plan = services?.get(params.id!);
     if (!plan) return { status: 404, body: { error: "not_found", message: `no gated plan for service ${params.id}` } };
     return { status: 200, body: plan };
+  });
+
+  // Same tier1-has-no-path-to-admin.sock mirror pattern as /plugins and
+  // /plans: names + lastRotated only, never values (§12.4) -- this is a
+  // pure read of the same secrets dir the admin socket's set/unset routes
+  // already write to.
+  router.register("GET", "/secrets", async () => {
+    if (!extra?.secretsDir) return { status: 200, body: { secrets: [] } };
+    return { status: 200, body: { secrets: listSecrets(extra.secretsDir) } };
   });
 
   return router;

@@ -16,6 +16,7 @@ import {
 import { publishComposedSchema } from "./composed-schema/index.js";
 import { canonicalApprovalPayload } from "./signing-key.js";
 import type { GateSnapshotHolder } from "./reconciler/index.js";
+import { putSecret, unsetSecret, listSecrets } from "./secrets/store.js";
 
 /** Mutable holder so `key import`/`key rotate` can swap the live manager instance. */
 export interface SigningKeyHolder {
@@ -37,6 +38,7 @@ export interface AdminSocketDeps {
   stagingDir: string;
   bundlesDir: string;
   statusDir: string;
+  secretsDir: string;
   gateSnapshotHolder: GateSnapshotHolder;
   onApprovalChange?: () => void;
 }
@@ -251,6 +253,31 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
     auditLog.append({ type: "plan.revoke", details: { projectionHash } });
     deps.onApprovalChange?.();
     return { status: 200, body: { revoked: true, projectionHash } };
+  });
+
+  router.register("GET", "/secrets", async () => ({
+    status: 200,
+    body: { secrets: listSecrets(deps.secretsDir) }, // names + lastRotated only, never values (§12.4)
+  }));
+
+  router.register("POST", "/secrets", async ({ body }) => {
+    const { name, value } = (body ?? {}) as { name?: string; value?: string };
+    if (!name || value === undefined) {
+      return { status: 400, body: { error: "usage", message: "name and value are required" } };
+    }
+    putSecret(deps.secretsDir, name, value);
+    auditLog.append({ type: "secret.set", details: { name } }); // value never logged
+    return { status: 200, body: { name, set: true } };
+  });
+
+  router.register("POST", "/secrets/unset", async ({ body }) => {
+    const { name } = (body ?? {}) as { name?: string };
+    if (!name) {
+      return { status: 400, body: { error: "usage", message: "name is required" } };
+    }
+    unsetSecret(deps.secretsDir, name);
+    auditLog.append({ type: "secret.unset", details: { name } });
+    return { status: 200, body: { name, unset: true } };
   });
 
   return router;

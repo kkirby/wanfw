@@ -39,8 +39,9 @@ async function freshRouter() {
   const stagingDir = await mkdtemp(join(tmpdir(), "wanfw-status-staging-"));
   const bundlesDir = await mkdtemp(join(tmpdir(), "wanfw-status-bundles-"));
   const statusDir = await mkdtemp(join(tmpdir(), "wanfw-status-statusdir-"));
+  const secretsDir = await mkdtemp(join(tmpdir(), "wanfw-status-secretsdir-"));
   return {
-    router: buildStatusSocketRouter(heartbeat, nudge, { store, stagingDir, statusDir }),
+    router: buildStatusSocketRouter(heartbeat, nudge, { store, stagingDir, statusDir, secretsDir }),
     heartbeat,
     nudge,
     store,
@@ -48,6 +49,7 @@ async function freshRouter() {
     stagingDir,
     bundlesDir,
     statusDir,
+    secretsDir,
   };
 }
 
@@ -78,14 +80,14 @@ describe("status socket handlers (live HTTP over a real Unix socket)", () => {
   });
 
   async function boot() {
-    const { router, heartbeat, nudge, store, dbDir, stagingDir, bundlesDir, statusDir } = await freshRouter();
-    dirs.push(dbDir, stagingDir, bundlesDir, statusDir);
+    const { router, heartbeat, nudge, store, dbDir, stagingDir, bundlesDir, statusDir, secretsDir } = await freshRouter();
+    dirs.push(dbDir, stagingDir, bundlesDir, statusDir, secretsDir);
     const dir = await mkdtemp(join(tmpdir(), "wanfw-status-socket-"));
     dirs.push(dir);
     const socketPath = join(dir, "orch-status.sock");
     servers.push(listenOnUnixSocket(router, socketPath));
     await new Promise((r) => setTimeout(r, 50));
-    return { socketPath, heartbeat, nudge, store, stagingDir, bundlesDir, statusDir };
+    return { socketPath, heartbeat, nudge, store, stagingDir, bundlesDir, statusDir, secretsDir };
   }
 
   it("GET /status returns the current heartbeat", async () => {
@@ -234,5 +236,18 @@ describe("status socket handlers (live HTTP over a real Unix socket)", () => {
     });
     const found = await requestOverSocket(socketPath, "GET", "/plugins/deploy-docker");
     expect(found.status).toBe(200);
+  });
+
+  it("GET /secrets mirrors the admin socket's secret store read-only (names + lastRotated, never values -- T4.1, tier1's read path)", async () => {
+    const { socketPath, secretsDir } = await boot();
+    await mkdir(join(secretsDir, "cert-letsencrypt-dns01"), { recursive: true, mode: 0o700 });
+    await writeFile(join(secretsDir, "cert-letsencrypt-dns01", "acme-account-key"), "the-actual-secret-value", { mode: 0o600 });
+
+    const res = await requestOverSocket(socketPath, "GET", "/secrets");
+    expect(res.status).toBe(200);
+    const secrets = (res.body as { secrets: Array<{ name: string; lastRotated: string }> }).secrets;
+    expect(secrets).toHaveLength(1);
+    expect(secrets[0]!.name).toBe("cert-letsencrypt-dns01/acme-account-key");
+    expect(JSON.stringify(res.body)).not.toContain("the-actual-secret-value");
   });
 });

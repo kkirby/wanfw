@@ -280,6 +280,49 @@ export function buildProgram(deps: CliDeps): Command {
       });
     });
 
+  const secret = program.command("secret").description("Secrets store (§12.4) -- values only ever via stdin, never argv");
+
+  secret
+    .command("list")
+    .description("List secret names and last-rotated timestamps (never values)")
+    .action(async () => {
+      await withAdminRequest(deps, "GET", "/secrets", undefined, (body) => {
+        deps.stdout(JSON.stringify(body, null, 2));
+      });
+    });
+
+  secret
+    .command("set <name> [rejectedValueArg...]")
+    .description("Set a secret's value, read from stdin (e.g. `echo -n VALUE | wanfwctl secret set <plugin>/<name>`)")
+    .action(async (name: string, rejectedValueArg: string[]) => {
+      // The value must never appear on argv (shell history, `ps`, process
+      // listings all leak it) -- this catches `secret set <name> <value>`
+      // and fails loudly rather than silently accepting/ignoring it.
+      if (rejectedValueArg.length > 0) {
+        deps.stderr("error: the secret value must be piped via stdin, not passed as an argument");
+        process.exitCode = EXIT_CODES.usage;
+        return;
+      }
+      const value = await (deps.readStdin ?? readAllStdin)();
+      if (!value.trim()) {
+        deps.stderr("error: no value on stdin");
+        process.exitCode = EXIT_CODES.usage;
+        return;
+      }
+      await withAdminRequest(deps, "POST", "/secrets", { name, value }, () => {
+        deps.stdout(`set ${name}`);
+      });
+    });
+
+  secret
+    .command("unset <name>")
+    .description("Remove a secret")
+    .action(async (name: string) => {
+      await withAdminRequest(deps, "POST", "/secrets/unset", { name }, () => {
+        deps.stdout(`unset ${name}`);
+      });
+    });
+
   return program;
 }
 
