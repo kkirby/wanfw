@@ -176,13 +176,26 @@ export async function runInit(deps: InitDeps): Promise<number> {
   await mkdir(statusDir, { recursive: true });
   await writeFile(join(statusDir, "setup-token.json"), JSON.stringify({ token, createdAt: new Date().toISOString() }));
 
-  deps.stdout("\n--- Next steps ---");
-  deps.stdout(`1. Point DNS: *.${domain} A ${wanIp ?? "<your WAN IP>"}`);
-  deps.stdout(
+  const forwardInstruction =
     networkProvider === "network-macvlan"
-      ? "2. Forward WAN:443 (and :80) to the proxy's macvlan IP -- run `wanfwctl plugin invoke network-macvlan network.plan '{...}'` or check `wanfwctl status` for the exact address once allocated."
-      : "2. Forward WAN:443 (and :80) to this host's LAN IP.",
-  );
+      ? "Forward WAN:443 (and :80) to the proxy's macvlan IP -- run `wanfwctl plugin invoke network-macvlan network.plan '{...}'` or check `wanfwctl status` for the exact address once allocated."
+      : "Forward WAN:443 (and :80) to this host's LAN IP.";
+  const dnsInstruction = `Point DNS: *.${domain} A ${wanIp ?? "<your WAN IP>"}`;
+
+  // T5.5: mirrored read-only onto tier1's setup page (via GET
+  // /operator-info) so the operator isn't relying on terminal scrollback
+  // to find these again later.
+  await adminRequest(deps.adminSocketPath, "POST", "/operator-info", {
+    domain,
+    wanIp: wanIp ?? null,
+    networkProvider,
+    instructions: [dnsInstruction, forwardInstruction],
+    generatedAt: new Date().toISOString(),
+  }).catch(() => {}); // best-effort -- never block init's own success on this
+
+  deps.stdout("\n--- Next steps ---");
+  deps.stdout(`1. ${dnsInstruction}`);
+  deps.stdout(`2. ${forwardInstruction}`);
   deps.stdout(`3. Open http://<this-host-LAN-IP>:8443/setup and enter setup token: ${token}`);
   deps.stdout("   (valid for 24h; re-run `wanfwctl init` to issue a new one)");
 

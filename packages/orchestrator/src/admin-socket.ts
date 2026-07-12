@@ -392,5 +392,24 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
     return { status: 200, body: { set: true } };
   });
 
+  // -- operator info (T5.5) -------------------------------------------------
+  // Written once by `wanfwctl init` right after it prints its own "Next
+  // steps" (DNS record, forward target, WAN IP) -- captured here purely so
+  // tier1's setup page can mirror the *same* instructions read-only,
+  // rather than the operator needing to have kept their terminal scrollback.
+  router.register("GET", "/operator-info", async () => ({
+    status: 200,
+    body: { operatorInfo: store.getOperatorInfo() ?? null },
+  }));
+
+  router.register("POST", "/operator-info", async ({ body }) => {
+    if (body === undefined || body === null) {
+      return { status: 400, body: { error: "usage", message: "operator info body is required" } };
+    }
+    store.setOperatorInfo(body);
+    auditLog.append({ type: "operator-info.set", details: {} });
+    return { status: 200, body: { set: true } };
+  });
+
   return router;
 }

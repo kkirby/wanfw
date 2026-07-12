@@ -148,6 +148,86 @@ describe("admin socket: /framework (T5.3, docs/t5.3-decisions.md)", () => {
   });
 });
 
+describe("admin socket: /operator-info (T5.5)", () => {
+  const dirs: string[] = [];
+  const servers: Server[] = [];
+  const stores: StateStore[] = [];
+
+  afterEach(async () => {
+    servers.splice(0).forEach((s) => s.close());
+    stores.splice(0).forEach((s) => s.close());
+    await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true }).catch(() => {})));
+  });
+
+  async function boot() {
+    const heartbeat: HeartbeatState = { current: { phase: "pending-init", ts: "x", version: "0.1.0" } };
+    const dbDir = await mkdtemp(join(tmpdir(), "wanfw-admin-state-"));
+    dirs.push(dbDir);
+    const store = new StateStore(join(dbDir, "state.sqlite3"));
+    stores.push(store);
+    const keyDir = await mkdtemp(join(tmpdir(), "wanfw-admin-key-"));
+    dirs.push(keyDir);
+    const signingKeyHolder = { manager: await SigningKeyManager.loadOrCreate(join(keyDir, "signing.key")), keyPath: join(keyDir, "signing.key") };
+    const auditDir = await mkdtemp(join(tmpdir(), "wanfw-admin-audit-"));
+    dirs.push(auditDir);
+    const auditLog = new AuditLog(join(auditDir, "audit.jsonl"), () => signingKeyHolder.manager);
+    const stagingDir = await mkdtemp(join(tmpdir(), "wanfw-admin-staging-"));
+    dirs.push(stagingDir);
+    const bundlesDir = await mkdtemp(join(tmpdir(), "wanfw-admin-bundles-"));
+    dirs.push(bundlesDir);
+    const statusDir = await mkdtemp(join(tmpdir(), "wanfw-admin-status-"));
+    dirs.push(statusDir);
+    const secretsDir = await mkdtemp(join(tmpdir(), "wanfw-admin-secrets-"));
+    dirs.push(secretsDir);
+    const certsDir = await mkdtemp(join(tmpdir(), "wanfw-admin-certs-"));
+    dirs.push(certsDir);
+    const socketDir = await mkdtemp(join(tmpdir(), "wanfw-admin-sock-"));
+    dirs.push(socketDir);
+    const router = buildAdminSocketRouter({
+      heartbeat,
+      signingKeyHolder,
+      store,
+      auditLog,
+      pluginConnectionHolder: {},
+      stagingDir,
+      bundlesDir,
+      statusDir,
+      secretsDir,
+      certsDir,
+      gateSnapshotHolder: { services: new Map() },
+    });
+    const socketPath = join(socketDir, "admin.sock");
+    const server = listenOnUnixSocket(router, socketPath, 0o600);
+    servers.push(server);
+    await new Promise((r) => setTimeout(r, 50));
+    return { socketPath, store };
+  }
+
+  it("GET /operator-info returns null before anything has ever been set", async () => {
+    const { socketPath } = await boot();
+    const res = await requestOverSocket(socketPath, "GET", "/operator-info");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ operatorInfo: null });
+  });
+
+  it("POST /operator-info stores it and audits it, GET mirrors it back", async () => {
+    const { socketPath, store } = await boot();
+    const info = { domain: "example.tld", wanIp: "203.0.113.5", networkProvider: "network-bridge", instructions: ["forward WAN:443 -> LAN IP"] };
+    const res = await requestOverSocket(socketPath, "POST", "/operator-info", info);
+    expect(res.status).toBe(200);
+    expect(store.getOperatorInfo()).toEqual(info);
+
+    const getRes = await requestOverSocket(socketPath, "GET", "/operator-info");
+    expect(getRes.body).toEqual({ operatorInfo: info });
+  });
+
+  it("POST /operator-info with no body is a usage error", async () => {
+    const { socketPath } = await boot();
+    const res = await requestOverSocket(socketPath, "POST", "/operator-info");
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("admin socket: /plugins/trust-builtins ids filter (T5.3)", () => {
   const dirs: string[] = [];
   const servers: Server[] = [];

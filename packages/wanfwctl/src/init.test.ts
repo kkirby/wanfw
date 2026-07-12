@@ -44,6 +44,10 @@ describe("runInit (T5.3 wizard)", () => {
     });
     router.register("GET", "/status", async () => ({ status: 200, body: { phase: overrides?.statusOk ?? "live" } }));
     router.register("GET", "/network/wan-ip", async () => ({ status: 200, body: { ip: overrides?.wanIp === undefined ? "203.0.113.5" : overrides.wanIp } }));
+    router.register("POST", "/operator-info", async ({ body }) => {
+      calls.push({ method: "POST", path: "/operator-info", body });
+      return { status: 200, body: { set: true } };
+    });
 
     const dir = await mkdtemp(join(tmpdir(), "wanfw-init-"));
     dirs.push(dir);
@@ -109,6 +113,14 @@ describe("runInit (T5.3 wizard)", () => {
     expect(new Date(tokenFile.createdAt).getTime()).toBeGreaterThan(0);
 
     expect(out.lines.some((l) => l.includes("setup token"))).toBe(true);
+
+    const operatorInfoCall = calls.find((c) => c.path === "/operator-info");
+    const operatorInfo = operatorInfoCall!.body as { domain: string; wanIp: string; networkProvider: string; instructions: string[] };
+    expect(operatorInfo.domain).toBe("example.tld");
+    expect(operatorInfo.wanIp).toBe("203.0.113.5");
+    expect(operatorInfo.networkProvider).toBe("network-bridge");
+    expect(operatorInfo.instructions).toHaveLength(2);
+    expect(operatorInfo.instructions[0]).toContain("example.tld");
   });
 
   it("macvlan provider: prompts for parent/CIDR/gateway and includes them in the framework doc", async () => {

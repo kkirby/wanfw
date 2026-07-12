@@ -37,6 +37,7 @@ export const STATUS_SOCKET_ROUTE_ALLOWLIST: ReadonlyArray<{ method: string; path
   { method: "GET", path: "/secrets" },
   { method: "GET", path: "/certs" },
   { method: "GET", path: "/framework" },
+  { method: "GET", path: "/operator-info" },
 ];
 
 export interface NudgeState {
@@ -197,6 +198,13 @@ export function buildStatusSocketRouter(
   router.register("GET", "/framework", async () => {
     if (!extra) return { status: 200, body: { framework: null } };
     return { status: 200, body: { framework: extra.store.getFrameworkDoc() ?? null } };
+  });
+
+  // Read-only mirror of the wizard's own operator instructions (T5.5) --
+  // same reasoning as the /framework mirror just above.
+  router.register("GET", "/operator-info", async () => {
+    if (!extra) return { status: 200, body: { operatorInfo: null } };
+    return { status: 200, body: { operatorInfo: extra.store.getOperatorInfo() ?? null } };
   });
 
   return router;

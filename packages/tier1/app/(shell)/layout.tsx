@@ -10,7 +10,7 @@ const NAV_ITEMS = [
   { href: "/plugins", label: "Plugins" },
   { href: "/approvals", label: "Approvals" },
   { href: "/secrets", label: "Secrets" },
-  { href: "/setup", label: "Setup" },
+  { href: "/instructions", label: "Setup instructions" },
 ];
 
 export default function ShellLayout({ children }: { children: React.ReactNode }) {

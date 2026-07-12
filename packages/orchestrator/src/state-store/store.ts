@@ -243,6 +243,17 @@ export class StateStore {
     this.setMeta("framework_doc", JSON.stringify(raw));
   }
 
+  // -- operator info (T5.5) -------------------------------------------------
+  /** The wizard's own operator instructions (DNS record, forward target, WAN IP at the time `wanfwctl init` ran), captured so tier1's setup page can mirror them read-only -- same "write once via admin.sock, mirror via status-socket" shape as the framework doc itself. */
+  getOperatorInfo(): unknown | undefined {
+    const raw = this.getMeta("operator_info");
+    return raw === undefined ? undefined : (JSON.parse(raw) as unknown);
+  }
+
+  setOperatorInfo(raw: unknown): void {
+    this.setMeta("operator_info", JSON.stringify(raw));
+  }
+
   // -- ipam (T5.1, ADR-1) -------------------------------------------------
   /** Idempotent: called on every reconcile load from `framework.spec.network.macvlan` to keep the range in sync with the current desired state (a changed CIDR/gateway just updates the row in place -- existing allocations outside the new CIDR are left alone rather than force-released, since that's a network-provider-level decision, not this table's). */
   setIpamRange(row: IpamRangeRow): void {

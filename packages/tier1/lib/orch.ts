@@ -153,3 +153,18 @@ export async function listSecrets(): Promise<SecretListEntry[]> {
   const res = await orchRequest("GET", "/secrets");
   return ((res.body as { secrets: SecretListEntry[] } | undefined)?.secrets) ?? [];
 }
+
+export interface OperatorInfo {
+  domain: string;
+  wanIp: string | null;
+  networkProvider: string;
+  instructions: string[];
+  generatedAt: string;
+}
+
+/** `wanfwctl init`'s own DNS-record/port-forward instructions (T5.5) -- read-only here, written only by the wizard via admin.sock. */
+export async function getOperatorInfo(): Promise<OperatorInfo | undefined> {
+  const res = await orchRequest("GET", "/operator-info");
+  const info = (res.body as { operatorInfo: OperatorInfo | null } | undefined)?.operatorInfo;
+  return info ?? undefined;
+}

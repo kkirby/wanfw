@@ -266,4 +266,15 @@ describe("status socket handlers (live HTTP over a real Unix socket)", () => {
     const after = await requestOverSocket(socketPath, "GET", "/framework");
     expect(after.body).toEqual({ framework: doc });
   });
+
+  it("GET /operator-info mirrors the admin socket's operator info, null before anything is set (T5.5)", async () => {
+    const { socketPath, store } = await boot();
+    const before = await requestOverSocket(socketPath, "GET", "/operator-info");
+    expect(before.body).toEqual({ operatorInfo: null });
+
+    const info = { domain: "example.tld", wanIp: "203.0.113.5", networkProvider: "network-bridge", instructions: ["forward WAN:443 -> LAN IP"] };
+    store.setOperatorInfo(info);
+    const after = await requestOverSocket(socketPath, "GET", "/operator-info");
+    expect(after.body).toEqual({ operatorInfo: info });
+  });
 });
