@@ -39,7 +39,7 @@ export async function ensureNetwork(
 export async function ensureVolume(
   docker: DockerClient,
   name: string,
-  labels: { service: string; plan: string },
+  labels: { service: string; plan: string; removeVolumesOnDelete?: boolean },
 ): Promise<StepResult> {
   const existing = await docker.findManagedVolumeByName(name);
   if (existing) {
@@ -48,7 +48,12 @@ export async function ensureVolume(
   const confighash = computeVolumeConfigHash(name);
   await docker.createVolume(
     name,
-    baseLabels({ "wanfw.service": labels.service, "wanfw.plan": labels.plan, "wanfw.confighash": confighash }),
+    baseLabels({
+      "wanfw.service": labels.service,
+      "wanfw.plan": labels.plan,
+      "wanfw.confighash": confighash,
+      "wanfw.removeVolumesOnDelete": labels.removeVolumesOnDelete ? "true" : "false",
+    }),
   );
   return { step: `ensureVolume:${name}`, changed: true, detail: "created" };
 }

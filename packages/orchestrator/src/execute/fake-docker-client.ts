@@ -69,4 +69,31 @@ export class FakeDockerClient implements DockerClient {
     this.execCalls.push({ containerName, cmd });
     return this.execResult;
   }
+
+  async listManagedContainers() {
+    return [...this.containers.values()].filter((c) => c.labels["wanfw.managed"] === "true");
+  }
+
+  async listManagedNetworks() {
+    return [...this.networks.values()].filter((n) => n.labels["wanfw.managed"] === "true");
+  }
+
+  async listManagedVolumes() {
+    return [...this.volumes.values()].filter((v) => v.labels["wanfw.managed"] === "true");
+  }
+
+  async removeNetwork(id: string) {
+    for (const [name, info] of this.networks) {
+      if (info.id === id) this.networks.delete(name);
+    }
+  }
+
+  async removeVolume(name: string) {
+    this.volumes.delete(name);
+  }
+
+  /** Adds an unlabeled bystander container -- used to prove GC never touches non-wanfw-managed objects. */
+  addBystanderContainer(name: string): void {
+    this.containers.set(name, { id: `bystander-${this.nextId++}`, name, labels: {}, networks: [], state: "running" });
+  }
 }

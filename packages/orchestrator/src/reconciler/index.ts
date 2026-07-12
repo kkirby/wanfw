@@ -6,3 +6,4 @@ export * from "./plugin-invoker.js";
 export * from "./validate-stage.js";
 export * from "./gate-stage.js";
 export * from "./execute-stage.js";
+export * from "./observe-stage.js";

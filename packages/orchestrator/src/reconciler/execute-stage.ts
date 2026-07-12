@@ -65,12 +65,15 @@ export function buildExecuteStage(deps: ExecuteStageDeps): NamedStage {
         }
 
         const spec = rawSpec as ContainerSpec;
+        const removeVolumesOnDelete = Boolean(
+          (desiredState.services.get(serviceId)?.spec.expose as { removeVolumesOnDelete?: boolean } | undefined)?.removeVolumesOnDelete,
+        );
         try {
           const netResult = await ensureNetwork(deps.docker, serviceNetworkName(serviceId), { service: serviceId, plan: planId });
           journal(netResult.step, { serviceId }, netResult);
 
           for (const vol of namedVolumes(serviceId, spec)) {
-            const volResult = await ensureVolume(deps.docker, vol.source, { service: serviceId, plan: planId });
+            const volResult = await ensureVolume(deps.docker, vol.source, { service: serviceId, plan: planId, removeVolumesOnDelete });
             journal(volResult.step, { serviceId, volume: vol.source }, volResult);
           }
 

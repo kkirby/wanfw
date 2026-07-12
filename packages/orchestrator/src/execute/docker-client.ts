@@ -60,6 +60,13 @@ export interface DockerClient {
   startContainer(id: string): Promise<void>;
   connectNetwork(containerId: string, networkName: string): Promise<void>;
   exec(containerName: string, cmd: string[]): Promise<{ exitCode: number; output: string }>;
+
+  /** OBSERVE/GC (§7, ADR-9): every list here is scoped to `wanfw.managed=true` -- unlabeled bystanders are structurally invisible, never queried. */
+  listManagedContainers(): Promise<DockerContainerInfo[]>;
+  listManagedNetworks(): Promise<DockerNetworkInfo[]>;
+  listManagedVolumes(): Promise<DockerVolumeInfo[]>;
+  removeNetwork(id: string): Promise<void>;
+  removeVolume(name: string): Promise<void>;
 }
 
 const MANAGED_LABEL = "wanfw.managed";
@@ -165,6 +172,35 @@ export function buildRealDockerClient(socketPath?: string): DockerClient {
       const net = networks.find((n) => n.Name === networkName);
       if (!net) throw new Error(`network ${networkName} not found`);
       await docker.getNetwork(net.Id).connect({ Container: containerId });
+    },
+
+    async listManagedContainers() {
+      const containers = await docker.listContainers({ all: true, filters: JSON.stringify({ label: [`${MANAGED_LABEL}=true`] }) });
+      return containers.map((c) => ({
+        id: c.Id,
+        name: c.Names[0]?.replace(/^\//, "") ?? c.Id,
+        labels: c.Labels ?? {},
+        networks: Object.keys(c.NetworkSettings?.Networks ?? {}),
+        state: c.State,
+      }));
+    },
+
+    async listManagedNetworks() {
+      const networks = await docker.listNetworks({ filters: JSON.stringify({ label: [`${MANAGED_LABEL}=true`] }) });
+      return networks.map((n) => ({ id: n.Id, name: n.Name, labels: n.Labels ?? {} }));
+    },
+
+    async listManagedVolumes() {
+      const { Volumes } = await docker.listVolumes({ filters: JSON.stringify({ label: [`${MANAGED_LABEL}=true`] }) });
+      return (Volumes ?? []).map((v) => ({ name: v.Name, labels: v.Labels ?? {} }));
+    },
+
+    async removeNetwork(id) {
+      await docker.getNetwork(id).remove();
+    },
+
+    async removeVolume(name) {
+      await docker.getVolume(name).remove();
     },
 
     async exec(containerName, cmd) {
