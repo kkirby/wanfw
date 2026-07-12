@@ -27,7 +27,7 @@ describe("proxy-container (§8.4, ADR-9 core-emitted proxy)", () => {
       "wanfw_wanfw_proxycfg",
     );
 
-    expect(spec.image).toBe("caddy:2");
+    expect(spec.image).toMatch(/^caddy@sha256:/); // T6.3: pinned by digest
     expect(spec.networks).toEqual(["wanfw_exposure", "wanfw_svc_jellyfin", "wanfw_svc_kavita"]);
     expect(spec.ports).toEqual([443, 80]);
     expect(spec.mounts).toEqual([

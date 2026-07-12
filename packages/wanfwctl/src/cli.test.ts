@@ -495,6 +495,103 @@ describe("wanfwctl-inner CLI", () => {
     expect(setCalls()).toHaveLength(0);
   });
 
+  it("config set strictApprovals: merges the value into the existing framework doc's spec and forwards it (T6.2)", async () => {
+    const { socketPath, setCalls } = await bootFrameworkRouterWithDoc({
+      schemaVersion: 1,
+      kind: "Framework",
+      metadata: { id: "framework" },
+      spec: { domain: "example.tld", strictApprovals: "powerful" },
+    });
+    const out = captureOutput();
+    const code = await runCli(["config", "set", "strictApprovals", "all"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(setCalls()).toEqual([
+      { schemaVersion: 1, kind: "Framework", metadata: { id: "framework" }, spec: { domain: "example.tld", strictApprovals: "all" } },
+    ]);
+    expect(out.lines.some((l) => l.includes("strictApprovals set to 'all'"))).toBe(true);
+  });
+
+  it("config set strictApprovals: rejects an invalid value without calling the admin socket", async () => {
+    const { socketPath, setCalls } = await bootFrameworkRouter();
+    const out = captureOutput();
+    const code = await runCli(["config", "set", "strictApprovals", "bogus"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.usage);
+    expect(setCalls()).toHaveLength(0);
+  });
+
+  it("config set strictApprovals: errors when there is no framework doc yet", async () => {
+    const { socketPath } = await bootFrameworkRouter();
+    const out = captureOutput();
+    const code = await runCli(["config", "set", "strictApprovals", "all"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.usage);
+    expect(out.errLines.some((l) => l.includes("no framework document"))).toBe(true);
+  });
+
+  async function bootFrameworkRouterWithDoc(doc: unknown) {
+    const router = new JsonUdsRouter();
+    const setCalls: unknown[] = [];
+    router.register("GET", "/framework", async () => ({ status: 200, body: { framework: doc } }));
+    router.register("POST", "/framework", async ({ body }) => {
+      setCalls.push(body);
+      return { status: 200, body: { set: true } };
+    });
+    const dir = await mkdtemp(join(tmpdir(), "wanfw-cli-framework-doc-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "admin.sock");
+    servers.push(listenOnUnixSocket(router, socketPath));
+    await new Promise((r) => setTimeout(r, 50));
+    return { socketPath, setCalls: () => setCalls };
+  }
+
+  async function bootBannerPlanRouter(plan: unknown) {
+    const router = new JsonUdsRouter();
+    const approveCalls: unknown[] = [];
+    router.register("GET", "/plans/:id", async () => ({ status: 200, body: plan }));
+    router.register("POST", "/plans/approve", async ({ body }) => {
+      approveCalls.push(body);
+      return { status: 200, body: { approved: true, serviceId: (plan as { serviceId: string }).serviceId, projectionHash: (plan as { projectionHash: string }).projectionHash } };
+    });
+    const dir = await mkdtemp(join(tmpdir(), "wanfw-cli-plan-banner-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "admin.sock");
+    servers.push(listenOnUnixSocket(router, socketPath));
+    await new Promise((r) => setTimeout(r, 50));
+    return { socketPath, approveCalls: () => approveCalls };
+  }
+
+  it("plan show: prints catastrophic-grant banners before the JSON body (T6.1)", async () => {
+    const plan = {
+      serviceId: "evil",
+      tier: "powerful",
+      projectionHash: "h",
+      humanRendering: "x",
+      approved: false,
+      banners: ["**This grant is equivalent to root on the host**: bind-mounts the Docker socket"],
+    };
+    const { socketPath } = await bootBannerPlanRouter(plan);
+    const out = captureOutput();
+    const code = await runCli(["plan", "show", "evil"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(out.lines.some((l) => l.includes("equivalent to root on the host"))).toBe(true);
+  });
+
+  it("plan approve --service: prints the self-exposure banner before approving (T6.1/ADR-7)", async () => {
+    const plan = {
+      serviceId: "tier1",
+      tier: "powerful",
+      projectionHash: "h",
+      humanRendering: "x",
+      approved: false,
+      banners: ["**You are exposing the control plane of this system to the WAN, behind password auth only** (ADR-7)"],
+    };
+    const { socketPath, approveCalls } = await bootBannerPlanRouter(plan);
+    const out = captureOutput();
+    const code = await runCli(["plan", "approve", "--service", "tier1"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(out.lines.some((l) => l.includes("exposing the control plane"))).toBe(true);
+    expect(approveCalls()).toEqual([{ serviceId: "tier1", projectionHash: undefined }]);
+  });
+
   async function bootDoctorRouter(checks: Array<{ name: string; status: string; message: string }>) {
     const router = new JsonUdsRouter();
     router.register("GET", "/doctor", async () => ({ status: 200, body: { checks } }));

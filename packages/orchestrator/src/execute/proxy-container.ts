@@ -1,7 +1,8 @@
 import type { ContainerSpec } from "../validate/index.js";
 
 export const PROXY_CONTAINER_NAME = "wanfw-proxy";
-const PROXY_IMAGE = "caddy:2"; // TODO(T6.3): pin digest
+// T6.3: pinned by digest; re-resolve `docker pull caddy:2 && docker inspect --format='{{index .RepoDigests 0}}' caddy:2` and bump when intentionally upgrading Caddy.
+const PROXY_IMAGE = "caddy@sha256:af5fdcd76f2db5e4e974ee92f96ee8c0fc3edb55bd4ba5032547cbf3f65e486d";
 
 export interface NetworkPlanLike {
   attachment?: { network?: string };

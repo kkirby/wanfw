@@ -106,7 +106,7 @@ describe("EXECUTE stage (T3.8)", () => {
       certRequirements: { mode: "internal-ca", names: [] },
     };
     const gateSnapshot = new Map<string, GatedService>([
-      ["jellyfin", { serviceId: "jellyfin", tier: "powerful", projectionHash: "h", humanRendering: "x", approved: false }],
+      ["jellyfin", { serviceId: "jellyfin", tier: "powerful", projectionHash: "h", humanRendering: "x", approved: false, banners: [] }],
     ]);
     const stage = buildExecuteStage({ store, docker, proxycfgDir, certsVolumeName: "wanfw_certs", proxycfgVolumeName: "wanfw_proxycfg" });
     const result = await stage.run({ desiredState, planGraph, gateSnapshot } as unknown as ReconcileRunContext);
@@ -127,7 +127,7 @@ describe("EXECUTE stage (T3.8)", () => {
       certRequirements: { mode: "internal-ca", names: [] },
     };
     const gateSnapshot = new Map<string, GatedService>([
-      ["jellyfin", { serviceId: "jellyfin", tier: "powerful", projectionHash: "h", humanRendering: "x", approved: true }],
+      ["jellyfin", { serviceId: "jellyfin", tier: "powerful", projectionHash: "h", humanRendering: "x", approved: true, banners: [] }],
     ]);
     const stage = buildExecuteStage({ store, docker, proxycfgDir, certsVolumeName: "wanfw_certs", proxycfgVolumeName: "wanfw_proxycfg" });
     const result = await stage.run({ desiredState, planGraph, gateSnapshot } as unknown as ReconcileRunContext);

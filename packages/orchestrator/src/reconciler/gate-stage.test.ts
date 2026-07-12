@@ -173,4 +173,77 @@ describe("GATE stage", () => {
 
     expect(holder.services.has("kavita")).toBe(false); // never gated at all
   });
+
+  it("T6.1: a docker.sock bind mount gets the catastrophic-grant banner", async () => {
+    const store = await makeStore();
+    const holder: GateSnapshotHolder = { services: new Map() };
+    const desiredState: DesiredState = { framework: frameworkDoc(), services: new Map(), pluginConfigs: new Map(), errors: [] };
+    const planGraph: PlanGraph = {
+      servicePlans: { evil: { image: "x", mounts: [{ type: "bind", source: "/var/run/docker.sock", target: "/var/run/docker.sock", readOnly: false }] } },
+      routes: [],
+      certRequirements: { mode: "internal-ca", names: [] },
+    };
+    const validation = { evil: { tier: "powerful" } };
+
+    const stage = buildGateStage({ store }, holder);
+    await stage.run({ desiredState, planGraph, validation } as unknown as ReconcileRunContext);
+
+    const banners = holder.services.get("evil")?.banners ?? [];
+    expect(banners.length).toBe(1);
+    expect(banners[0]).toContain("This grant is equivalent to root on the host");
+    expect(banners[0]).toContain("Docker socket");
+  });
+
+  it("T6.1: privileged, /dev/mem, and raw disk devices each surface in the catastrophic banner", async () => {
+    const store = await makeStore();
+    const holder: GateSnapshotHolder = { services: new Map() };
+    const desiredState: DesiredState = { framework: frameworkDoc(), services: new Map(), pluginConfigs: new Map(), errors: [] };
+    const planGraph: PlanGraph = {
+      servicePlans: { evil: { image: "x", privileged: true, devices: ["/dev/mem", "/dev/sda1"] } },
+      routes: [],
+      certRequirements: { mode: "internal-ca", names: [] },
+    };
+    const validation = { evil: { tier: "powerful" } };
+
+    const stage = buildGateStage({ store }, holder);
+    await stage.run({ desiredState, planGraph, validation } as unknown as ReconcileRunContext);
+
+    const banner = holder.services.get("evil")?.banners[0] ?? "";
+    expect(banner).toContain("runs privileged");
+    expect(banner).toContain("/dev/mem");
+    expect(banner).toContain("/dev/sda1");
+  });
+
+  it("T6.1: a harmless powerful plan (e.g. just a device grant match) gets no catastrophic banner", async () => {
+    const store = await makeStore();
+    const holder: GateSnapshotHolder = { services: new Map() };
+    const desiredState: DesiredState = { framework: frameworkDoc(), services: new Map(), pluginConfigs: new Map(), errors: [] };
+    const planGraph: PlanGraph = {
+      servicePlans: { jellyfin: { image: "jellyfin/jellyfin:10.9.11", devices: ["/dev/dri/renderD128"] } },
+      routes: [],
+      certRequirements: { mode: "internal-ca", names: [] },
+    };
+    const validation = { jellyfin: { tier: "powerful" } };
+
+    const stage = buildGateStage({ store }, holder);
+    await stage.run({ desiredState, planGraph, validation } as unknown as ReconcileRunContext);
+
+    expect(holder.services.get("jellyfin")?.banners).toEqual([]);
+  });
+
+  it("T6.1/ADR-7: a service document named 'tier1' is force-classified powerful with the self-exposure banner, even if it emits nothing powerful", async () => {
+    const store = await makeStore();
+    const holder: GateSnapshotHolder = { services: new Map() };
+    const desiredState: DesiredState = { framework: frameworkDoc(), services: new Map(), pluginConfigs: new Map(), errors: [] };
+    const planGraph: PlanGraph = { servicePlans: { tier1: { image: "wanfw/tier1:dev" } }, routes: [], certRequirements: { mode: "internal-ca", names: [] } };
+    const validation = { tier1: { tier: "baseline" } }; // classifier itself sees nothing powerful
+
+    const stage = buildGateStage({ store }, holder);
+    await stage.run({ desiredState, planGraph, validation } as unknown as ReconcileRunContext);
+
+    const gated = holder.services.get("tier1");
+    expect(gated?.tier).toBe("powerful");
+    expect(gated?.approved).toBe(false); // never auto-approved, never blocked either -- just gated
+    expect(gated?.banners.some((b) => b.includes("control plane"))).toBe(true);
+  });
 });

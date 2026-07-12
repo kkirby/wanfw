@@ -151,7 +151,7 @@ describe("OBSERVE stage (T3.9)", () => {
     const services = new Map([["kavita", serviceDoc("kavita")]]);
     const desiredState: DesiredState = { framework: frameworkDoc(), services, pluginConfigs: new Map(), errors: [] };
     const gateSnapshot = new Map([
-      ["kavita", { serviceId: "kavita", tier: "powerful" as const, projectionHash: "h", humanRendering: "x", approved: false }],
+      ["kavita", { serviceId: "kavita", tier: "powerful" as const, projectionHash: "h", humanRendering: "x", approved: false, banners: [] }],
     ]);
     const stage = buildObserveStage({ store, docker, statusDir });
     await stage.run({ desiredState, gateSnapshot } as unknown as ReconcileRunContext);

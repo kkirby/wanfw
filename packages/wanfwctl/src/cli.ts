@@ -52,6 +52,16 @@ async function readAllStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+/** T6.1: prints any catastrophic-grant/self-exposure banners on a gated-plan body unmissably, before the rest of the output. */
+function printBanners(deps: CliDeps, body: unknown): void {
+  const banners = (body as { banners?: string[] } | undefined)?.banners ?? [];
+  for (const banner of banners) {
+    deps.stdout("!".repeat(banner.length > 72 ? 72 : banner.length));
+    deps.stdout(banner);
+    deps.stdout("!".repeat(banner.length > 72 ? 72 : banner.length));
+  }
+}
+
 /** Wraps an admin-socket call with the shared error -> exit-code mapping. */
 async function withAdminRequest(
   deps: CliDeps,
@@ -280,6 +290,7 @@ export function buildProgram(deps: CliDeps): Command {
     .description("Show a gated plan's human-rendered projection")
     .action(async (serviceId: string) => {
       await withAdminRequest(deps, "GET", `/plans/${encodeURIComponent(serviceId)}`, undefined, (body) => {
+        printBanners(deps, body);
         deps.stdout(JSON.stringify(body, null, 2));
       });
     });
@@ -294,6 +305,12 @@ export function buildProgram(deps: CliDeps): Command {
         deps.stderr("usage: wanfwctl plan approve (--service <id> | --hash <projectionHash>)");
         process.exitCode = EXIT_CODES.usage;
         return;
+      }
+      if (opts.service) {
+        // T6.1: print catastrophic-grant / self-exposure banners before the
+        // approval takes effect, not just when browsing with `plan show`.
+        const res = await adminRequest(deps.adminSocketPath, "GET", `/plans/${encodeURIComponent(opts.service)}`, undefined).catch(() => undefined);
+        if (res && res.status >= 200 && res.status < 300) printBanners(deps, res.body);
       }
       await withAdminRequest(
         deps,
@@ -406,6 +423,35 @@ export function buildProgram(deps: CliDeps): Command {
       }
       await withAdminRequest(deps, "POST", "/framework", doc, () => {
         deps.stdout("framework document set");
+      });
+    });
+
+  const config = program.command("config").description("Framework-wide config knobs (T6.2)");
+
+  config
+    .command("set <key> <value>")
+    .description("Set a config knob. Supported keys: strictApprovals=<powerful|all>")
+    .action(async (key: string, value: string) => {
+      if (key !== "strictApprovals") {
+        deps.stderr(`error: unknown config key '${key}' (supported: strictApprovals)`);
+        process.exitCode = EXIT_CODES.usage;
+        return;
+      }
+      if (value !== "powerful" && value !== "all") {
+        deps.stderr("error: strictApprovals must be 'powerful' or 'all'");
+        process.exitCode = EXIT_CODES.usage;
+        return;
+      }
+      const getRes = await adminRequest(deps.adminSocketPath, "GET", "/framework", undefined);
+      const framework = (getRes.body as { framework: { spec?: Record<string, unknown> } | null }).framework;
+      if (!framework) {
+        deps.stderr("error: no framework document yet -- run `wanfwctl init` first");
+        process.exitCode = EXIT_CODES.usage;
+        return;
+      }
+      const updated = { ...framework, spec: { ...framework.spec, strictApprovals: value } };
+      await withAdminRequest(deps, "POST", "/framework", updated, () => {
+        deps.stdout(`strictApprovals set to '${value}'`);
       });
     });
 

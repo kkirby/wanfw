@@ -94,6 +94,37 @@ else
   fail "admin socket unreachable"
 fi
 
+echo "==> T6.3 assertion: tier1/pluginhost run non-root, no-new-privileges, zero capabilities, read-only rootfs"
+for c in wanfw-tier1 wanfw-pluginhost; do
+  UID_GID=$(docker inspect "$c" --format '{{.Config.User}}')
+  if exec_in "$c" sh -c 'id -u' 2>/dev/null | grep -qx 0; then
+    fail "$c runs as uid 0"
+  else
+    pass "$c does not run as uid 0 (Config.User=$UID_GID)"
+  fi
+  NNP=$(docker inspect "$c" --format '{{.HostConfig.SecurityOpt}}')
+  echo "$NNP" | grep -q "no-new-privileges" && pass "$c has no-new-privileges" || fail "$c missing no-new-privileges ($NNP)"
+  CAPDROP=$(docker inspect "$c" --format '{{.HostConfig.CapDrop}}')
+  echo "$CAPDROP" | grep -qi "all" && pass "$c has cap_drop ALL" || fail "$c missing cap_drop ALL ($CAPDROP)"
+  RO=$(docker inspect "$c" --format '{{.HostConfig.ReadonlyRootfs}}')
+  [ "$RO" = "true" ] && pass "$c has a read-only rootfs" || fail "$c rootfs is not read-only ($RO)"
+done
+
+echo "==> T6.3 assertion: every framework container reports a healthcheck status"
+for c in wanfw-tier1 wanfw-orchestrator wanfw-pluginhost; do
+  echo "  waiting for $c healthcheck..."
+  for _ in $(seq 1 20); do
+    STATUS=$(docker inspect "$c" --format '{{.State.Health.Status}}' 2>/dev/null || echo "none")
+    [ "$STATUS" = "healthy" ] && break
+    sleep 3
+  done
+  if [ "$STATUS" = "healthy" ]; then
+    pass "$c healthcheck: healthy"
+  else
+    fail "$c healthcheck did not reach healthy (last status: $STATUS)"
+  fi
+done
+
 echo "==> Tearing down the compose stack"
 docker compose down -v
 

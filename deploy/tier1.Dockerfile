@@ -1,5 +1,5 @@
-# TODO(T6.3): pin digest
-FROM node:22-bookworm-slim AS base
+# T6.3: base image pinned by digest (node:22-bookworm-slim); re-resolve and bump when intentionally upgrading Node.
+FROM node@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf AS base
 RUN corepack enable
 WORKDIR /app
 
