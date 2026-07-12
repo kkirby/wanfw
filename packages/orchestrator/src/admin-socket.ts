@@ -19,6 +19,8 @@ import type { GateSnapshotHolder } from "./reconciler/index.js";
 import { putSecret, unsetSecret, listSecrets } from "./secrets/store.js";
 import { listCerts, rollbackCert } from "./certs/store.js";
 import { validateEnvelope } from "./desired-state/index.js";
+import type { DockerClient } from "./execute/docker-client.js";
+import { runDoctorChecks } from "./doctor.js";
 
 /** Mutable holder so `key import`/`key rotate` can swap the live manager instance. */
 export interface SigningKeyHolder {
@@ -47,6 +49,10 @@ export interface AdminSocketDeps {
   onCertChange?: () => void;
   /** Triggers a reconcile after the framework doc changes (T5.3, docs/t5.3-decisions.md) -- same pattern as onApprovalChange/onCertChange. */
   onFrameworkChange?: () => void;
+  /** T5.4 `wanfwctl doctor` deps -- optional so every pre-T5.4 caller/test keeps compiling unchanged; GET /doctor degrades each affected check to `skip` rather than erroring when omitted. */
+  docker?: DockerClient;
+  dockerSocketPath?: string;
+  probeNetwork?: (mode: "macvlan", parent: string) => Promise<{ ok: boolean; reason?: string }>;
 }
 
 /**
@@ -192,6 +198,34 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
     } catch (err) {
       return { status: 502, body: { error: "wan_ip_detect_failed", message: (err as Error).message } };
     }
+  });
+
+  // T5.4 `wanfwctl doctor`: reuses the same `helper.wanIp`/`helper.resolveA`
+  // pluginhost RPCs and the same `probeMacvlan` real Docker-daemon check
+  // T5.2's `net.probeNetwork` already established, wrapped so a missing
+  // pluginhost connection degrades individual checks to `skip` rather than
+  // failing the whole report.
+  router.register("GET", "/doctor", async () => {
+    const connection = deps.pluginConnectionHolder.connection;
+    const checks = await runDoctorChecks({
+      dockerSocketPath: deps.dockerSocketPath,
+      store,
+      docker: deps.docker,
+      probeNetwork: deps.probeNetwork,
+      detectWanIp: connection
+        ? async () => {
+            const result = (await connection.call("helper.wanIp")) as { ip?: string };
+            return result.ip;
+          }
+        : undefined,
+      resolveA: connection
+        ? async (hostname: string) => {
+            const result = (await connection.call("helper.resolveA", { hostname })) as { addresses?: string[] };
+            return result.addresses ?? [];
+          }
+        : undefined,
+    });
+    return { status: 200, body: { checks } };
   });
 
   router.register("POST", "/plugins/untrust", async ({ body }) => {

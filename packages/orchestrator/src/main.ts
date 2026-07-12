@@ -181,6 +181,14 @@ const adminServer: Server = listenOnUnixSocket(
     onApprovalChange: () => void reconcileEngine.trigger("plan-approve"),
     onCertChange: () => void reconcileEngine.trigger("cert-rollback"),
     onFrameworkChange: () => void reconcileEngine.trigger("framework-set"),
+    docker: dockerClient,
+    // Matches dockerode's own default (buildRealDockerClient passes
+    // paths.dockerSocketPath straight through to `new Docker({socketPath})`,
+    // which falls back to this exact path itself when undefined) -- the
+    // doctor check needs a real path string to `existsSync` against, not
+    // "let the client library figure it out."
+    dockerSocketPath: paths.dockerSocketPath ?? "/var/run/docker.sock",
+    probeNetwork: (mode, parent) => dockerClient.probeMacvlan(parent),
   }),
   paths.adminSocketPath,
   0o600,

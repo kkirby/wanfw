@@ -239,4 +239,14 @@ describe("admin socket: /plugins/trust-builtins ids filter (T5.3)", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ip: "203.0.113.5" });
   });
+
+  it("GET /doctor runs the doctor checks, including a real WAN-IP/DNS check via helper.wanIp/helper.resolveA", async () => {
+    const { socketPath, store } = await bootWithBuiltins([]);
+    store.setFrameworkDoc({ spec: { domain: "example.tld", roles: { networkProvider: "network-bridge" } } });
+    const res = await requestOverSocket(socketPath, "GET", "/doctor");
+    expect(res.status).toBe(200);
+    const checks = (res.body as { checks: Array<{ name: string; status: string }> }).checks;
+    expect(checks.find((c) => c.name === "wan-ip-detect")?.status).toBe("pass");
+    expect(checks.find((c) => c.name === "framework-doc")?.status).toBe("pass");
+  });
 });

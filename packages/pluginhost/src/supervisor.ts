@@ -1,4 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
+import { resolve4 } from "node:dns/promises";
 import { join, relative } from "node:path";
 import { JsonRpcConnection, type MethodHandler } from "./jsonrpc.js";
 import { runInvocation, type InvocationJob, type ChildRunnerDeps } from "./child-runner.js";
@@ -91,6 +92,22 @@ export function registerSupervisorMethods(connection: JsonRpcConnection, deps: S
     const res = await fetch(endpoint);
     const body = (await res.json()) as { ip?: string };
     return { ip: body.ip };
+  });
+
+  // T5.4 doctor: real DNS resolution, needed to compare a domain's current
+  // A record against the detected WAN IP. Only the pluginhost supervisor
+  // process itself has real network egress in this whole system (§12.5) --
+  // this runs in the supervisor's own process, not a sandboxed spawned
+  // child, so T4.2's fetch()/WASM/prlimit finding doesn't apply here
+  // (node:dns never touches undici either way).
+  connection.registerMethod("helper.resolveA", async (params) => {
+    const { hostname } = params as { hostname: string };
+    try {
+      const addresses = await resolve4(hostname);
+      return { addresses };
+    } catch {
+      return { addresses: [] };
+    }
   });
 
   connection.registerMethod("invoke", async (params) => {

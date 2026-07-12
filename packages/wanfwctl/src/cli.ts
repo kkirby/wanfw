@@ -421,6 +421,22 @@ export function buildProgram(deps: CliDeps): Command {
       });
     });
 
+  program
+    .command("doctor")
+    .description("Diagnose the running deployment (T5.4): Docker socket, proxy container, network provider, WAN IP vs DNS, DNS provider credentials")
+    .action(async () => {
+      await withAdminRequest(deps, "GET", "/doctor", undefined, (body) => {
+        const checks = (body as { checks: Array<{ name: string; status: string; message: string }> }).checks;
+        const symbol: Record<string, string> = { pass: "[pass]", fail: "[FAIL]", warn: "[warn]", info: "[info]", skip: "[skip]" };
+        for (const check of checks) {
+          deps.stdout(`${symbol[check.status] ?? `[${check.status}]`} ${check.name}: ${check.message}`);
+        }
+        if (checks.some((c) => c.status === "fail")) {
+          process.exitCode = EXIT_CODES.validationFailure;
+        }
+      });
+    });
+
   return program;
 }
 

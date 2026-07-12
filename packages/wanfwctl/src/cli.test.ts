@@ -494,4 +494,38 @@ describe("wanfwctl-inner CLI", () => {
     expect(code).toBe(EXIT_CODES.usage);
     expect(setCalls()).toHaveLength(0);
   });
+
+  async function bootDoctorRouter(checks: Array<{ name: string; status: string; message: string }>) {
+    const router = new JsonUdsRouter();
+    router.register("GET", "/doctor", async () => ({ status: 200, body: { checks } }));
+    const dir = await mkdtemp(join(tmpdir(), "wanfw-cli-doctor-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "admin.sock");
+    servers.push(listenOnUnixSocket(router, socketPath));
+    await new Promise((r) => setTimeout(r, 50));
+    return { socketPath };
+  }
+
+  it("doctor: prints every check with its status symbol, exits ok when nothing failed", async () => {
+    const { socketPath } = await bootDoctorRouter([
+      { name: "docker-socket", status: "pass", message: "Docker socket reachable" },
+      { name: "dns-provider", status: "info", message: "dnsProvider bound to 'dns-namecheap'" },
+    ]);
+    const out = captureOutput();
+    const code = await runCli(["doctor"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(out.lines.some((l) => l.includes("[pass] docker-socket"))).toBe(true);
+    expect(out.lines.some((l) => l.includes("[info] dns-provider"))).toBe(true);
+  });
+
+  it("doctor: exits with validationFailure when any check failed", async () => {
+    const { socketPath } = await bootDoctorRouter([
+      { name: "docker-socket", status: "pass", message: "ok" },
+      { name: "proxy-container", status: "fail", message: "wanfw-proxy is not running" },
+    ]);
+    const out = captureOutput();
+    const code = await runCli(["doctor"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.validationFailure);
+    expect(out.lines.some((l) => l.includes("[FAIL] proxy-container"))).toBe(true);
+  });
 });
