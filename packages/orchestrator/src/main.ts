@@ -14,6 +14,7 @@ import type { JsonRpcConnection } from "@wanfw/pluginhost";
 import { buildHostApiDispatcher } from "./host-api/index.js";
 import { loadDesiredState, watchDesiredState, type DesiredState } from "./desired-state/index.js";
 import { publishComposedSchema } from "./composed-schema/index.js";
+import { resolveDependencies, type FrameworkSpec } from "./dependency-resolution/index.js";
 
 const log = createLogger("orchestrator");
 const paths = resolvePaths();
@@ -66,6 +67,20 @@ async function reloadDesiredState(): Promise<void> {
         serviceCount: latestDesiredState.services.size,
         pluginConfigCount: latestDesiredState.pluginConfigs.size,
       });
+    }
+
+    // Reconciler (T3.4) will gate PLAN on this; for now dependency
+    // resolution runs and surfaces config-time errors in the logs whenever
+    // a framework document is present, exercising T3.3 end-to-end.
+    if (latestDesiredState.framework) {
+      const resolution = await resolveDependencies(
+        stateStore,
+        paths.bundlesDir,
+        latestDesiredState.framework.spec as FrameworkSpec,
+      );
+      if (!resolution.ok) {
+        log.warn("dependency resolution failed", { errors: resolution.errors });
+      }
     }
   } catch (err) {
     log.error("desired-state reload failed", { message: (err as Error).message });
