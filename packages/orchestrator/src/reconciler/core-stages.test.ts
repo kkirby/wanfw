@@ -31,6 +31,38 @@ describe("core reconciler stages", () => {
     expect(ctx.desiredState).toBeDefined();
   });
 
+  it("load stage updates the roles holder with the framework doc's current role bindings, read live by T4.3's DNS broker", async () => {
+    const desiredDir = await tempDir();
+    await mkdir(join(desiredDir, "services"), { recursive: true });
+    await writeFile(
+      join(desiredDir, "framework.json"),
+      JSON.stringify({
+        kind: "Framework",
+        schemaVersion: 1,
+        metadata: { id: "framework" },
+        spec: {
+          domain: "example.tld",
+          deploymentMode: "subdomain",
+          acmeEmail: "ops@example.tld",
+          roles: { networkProvider: "network-bridge", proxyEngine: "proxy-caddy", dnsProvider: "dns-namecheap" },
+        },
+      }),
+    );
+    const rolesHolder = { roles: {} };
+    const stage = buildLoadStage({ desiredDir, bundlesDir: "", store: null as unknown as StateStore, rolesHolder });
+    await stage.run({});
+    expect(rolesHolder.roles).toEqual({ networkProvider: "network-bridge", proxyEngine: "proxy-caddy", dnsProvider: "dns-namecheap" });
+  });
+
+  it("load stage clears the roles holder back to {} when the framework doc disappears", async () => {
+    const desiredDir = await tempDir();
+    await mkdir(join(desiredDir, "services"), { recursive: true });
+    const rolesHolder = { roles: { dnsProvider: "dns-namecheap" } };
+    const stage = buildLoadStage({ desiredDir, bundlesDir: "", store: null as unknown as StateStore, rolesHolder });
+    await stage.run({});
+    expect(rolesHolder.roles).toEqual({});
+  });
+
   it("load stage fails with a structured error when a document is invalid", async () => {
     const desiredDir = await tempDir();
     await mkdir(join(desiredDir, "services"), { recursive: true });

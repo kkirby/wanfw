@@ -25,6 +25,7 @@ import {
   buildObserveStage,
   buildRealPluginInvoker,
   type GateSnapshotHolder,
+  type FrameworkRolesHolder,
 } from "./reconciler/index.js";
 import { buildRealDockerClient } from "./execute/index.js";
 
@@ -70,13 +71,14 @@ const pluginInvoker = buildRealPluginInvoker({
 
 const gateSnapshotHolder: GateSnapshotHolder = { services: new Map() };
 const dockerClient = buildRealDockerClient(paths.dockerSocketPath);
+const rolesHolder: FrameworkRolesHolder = { roles: {} };
 
 // Reconcile engine (T3.4-T3.9): level-triggered, single-flight, coalescing.
 // Every stage is real now (T3.1/T3.3/T3.5-T3.9) -- load, resolve, plan,
 // validate, gate, execute, observe -- the full pipeline shape from §7.
 const reconcileEngine = new ReconcileEngine({
   stages: [
-    buildLoadStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore }),
+    buildLoadStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore, rolesHolder }),
     buildResolveStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore }),
     buildPlanStage({ invokePlugin: pluginInvoker }),
     buildValidateStage({ store: stateStore }),
@@ -139,7 +141,7 @@ const adminServer: Server = listenOnUnixSocket(
 );
 log.info("admin socket listening", { path: paths.adminSocketPath });
 
-const hostApiDispatch = buildHostApiDispatcher(stateStore, log, paths.secretsDir);
+const hostApiDispatch = buildHostApiDispatcher({ store: stateStore, log, secretsDir: paths.secretsDir, rolesHolder, pluginInvoker });
 const pluginServer = listenPluginSocket(
   paths.pluginSocketPath,
   log,

@@ -3,10 +3,16 @@ import { loadDesiredState, type DesiredState } from "../desired-state/index.js";
 import { resolveDependencies, type FrameworkSpec } from "../dependency-resolution/index.js";
 import type { NamedStage, ReconcileRunContext, StageResult } from "./types.js";
 
+/** Mutable holder for the framework doc's current role bindings (§5.3), read live by the T4.3 DNS broker to find the bound dnsProvider without threading desired state through the host API dispatcher. */
+export interface FrameworkRolesHolder {
+  roles: Record<string, string>;
+}
+
 export interface CoreStagesDeps {
   desiredDir: string;
   bundlesDir: string;
   store: StateStore;
+  rolesHolder?: FrameworkRolesHolder;
 }
 
 /** load + migrate (§7): loadDesiredState already runs the migration chain in memory (T3.1). */
@@ -17,6 +23,9 @@ export function buildLoadStage(deps: CoreStagesDeps): NamedStage {
       try {
         const desiredState = await loadDesiredState(deps.desiredDir);
         ctx.desiredState = desiredState;
+        if (deps.rolesHolder) {
+          deps.rolesHolder.roles = (desiredState.framework?.spec.roles as Record<string, string> | undefined) ?? {};
+        }
         if (desiredState.errors.length > 0) {
           return {
             ok: false,

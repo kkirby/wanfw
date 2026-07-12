@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { StateStore } from "../state-store/store.js";
 import { createLogger } from "../logger.js";
 import { buildHostApiDispatcher, CapabilityError } from "./dispatcher.js";
+import type { FrameworkRolesHolder } from "../reconciler/core-stages.js";
+import type { PluginInvoker, PluginInvokeResult } from "../reconciler/plan-stage.js";
 
 describe("buildHostApiDispatcher", () => {
   const dirs: string[] = [];
@@ -15,15 +17,17 @@ describe("buildHostApiDispatcher", () => {
     dirs.splice(0).forEach((d) => rmSync(d, { recursive: true, force: true }));
   });
 
-  function freshDispatcher() {
+  function freshDispatcher(options?: { roles?: Record<string, string>; pluginInvoker?: PluginInvoker }) {
     const dir = mkdtempSync(join(tmpdir(), "wanfw-hostapi-"));
     dirs.push(dir);
     const secretsDir = mkdtempSync(join(tmpdir(), "wanfw-secrets-"));
     dirs.push(secretsDir);
     const store = new StateStore(join(dir, "state.sqlite3"));
     stores.push(store);
-    const dispatch = buildHostApiDispatcher(store, createLogger("test"), secretsDir);
-    return { dispatch, store, secretsDir };
+    const rolesHolder: FrameworkRolesHolder = { roles: options?.roles ?? {} };
+    const pluginInvoker: PluginInvoker = options?.pluginInvoker ?? (async () => ({ ok: true, result: {} }));
+    const dispatch = buildHostApiDispatcher({ store, log: createLogger("test"), secretsDir, rolesHolder, pluginInvoker });
+    return { dispatch, store, secretsDir, rolesHolder };
   }
 
   function grant(store: StateStore, pluginId: string, cap: string, scope: Record<string, unknown>): void {
@@ -163,6 +167,129 @@ describe("buildHostApiDispatcher", () => {
           args: { name: "cert-letsencrypt-dns01/k", value: "v2" },
         }),
       ).rejects.toThrow(CapabilityError);
+    });
+  });
+
+  describe("dns.setRecord/deleteRecord broker + dns.query (T4.3)", () => {
+    it("brokers a covering dns.record.write call to the bound dnsProvider plugin's dns.apply task -- the calling plugin never talks to it directly", async () => {
+      const invokeCalls: unknown[] = [];
+      const { dispatch, store } = freshDispatcher({
+        roles: { dnsProvider: "dns-namecheap" },
+        pluginInvoker: async (pluginId, task, input) => {
+          invokeCalls.push({ pluginId, task, input });
+          return { ok: true, result: {} };
+        },
+      });
+      grant(store, "cert-letsencrypt-dns01", "dns.record.write", { zones: ["example.tld"] });
+
+      const res = await dispatch({
+        invocationId: "i1",
+        pluginId: "cert-letsencrypt-dns01",
+        method: "dns.setRecord",
+        args: { zone: "example.tld", record: { type: "TXT", name: "_acme-challenge", value: "token" } },
+      });
+
+      expect(res).toEqual({});
+      expect(invokeCalls).toEqual([
+        {
+          pluginId: "dns-namecheap",
+          task: "dns.apply",
+          input: { zone: "example.tld", action: "set", record: { type: "TXT", name: "_acme-challenge", value: "token" } },
+        },
+      ]);
+    });
+
+    it("dns.deleteRecord brokers with action: 'delete'", async () => {
+      const invokeCalls: unknown[] = [];
+      const { dispatch, store } = freshDispatcher({
+        roles: { dnsProvider: "dns-namecheap" },
+        pluginInvoker: async (pluginId, task, input) => {
+          invokeCalls.push({ pluginId, task, input });
+          return { ok: true, result: {} };
+        },
+      });
+      grant(store, "cert-letsencrypt-dns01", "dns.record.write", { zones: ["example.tld"] });
+
+      await dispatch({
+        invocationId: "i1",
+        pluginId: "cert-letsencrypt-dns01",
+        method: "dns.deleteRecord",
+        args: { zone: "example.tld", record: { type: "TXT", name: "_acme-challenge", value: "token" } },
+      });
+
+      expect((invokeCalls[0] as { input: { action: string } }).input.action).toBe("delete");
+    });
+
+    it("denies a plugin with no dns.record.write grant covering the zone", async () => {
+      const { dispatch } = freshDispatcher({ roles: { dnsProvider: "dns-namecheap" } });
+      await expect(
+        dispatch({
+          invocationId: "i1",
+          pluginId: "cert-letsencrypt-dns01",
+          method: "dns.setRecord",
+          args: { zone: "example.tld", record: { type: "TXT", name: "x", value: "y" } },
+        }),
+      ).rejects.toThrow(CapabilityError);
+    });
+
+    it("denies a grant scoped to a different zone -- zone confinement isn't 'has any dns.record.write grant'", async () => {
+      const { dispatch, store } = freshDispatcher({ roles: { dnsProvider: "dns-namecheap" } });
+      grant(store, "cert-letsencrypt-dns01", "dns.record.write", { zones: ["other.tld"] });
+      await expect(
+        dispatch({
+          invocationId: "i1",
+          pluginId: "cert-letsencrypt-dns01",
+          method: "dns.setRecord",
+          args: { zone: "example.tld", record: { type: "TXT", name: "x", value: "y" } },
+        }),
+      ).rejects.toThrow(CapabilityError);
+    });
+
+    it("fails clearly when no dnsProvider role is currently bound, even with a covering grant", async () => {
+      const { dispatch, store } = freshDispatcher({ roles: {} });
+      grant(store, "cert-letsencrypt-dns01", "dns.record.write", { zones: ["example.tld"] });
+      await expect(
+        dispatch({
+          invocationId: "i1",
+          pluginId: "cert-letsencrypt-dns01",
+          method: "dns.setRecord",
+          args: { zone: "example.tld", record: { type: "TXT", name: "x", value: "y" } },
+        }),
+      ).rejects.toThrow(/no dnsProvider role/);
+    });
+
+    it("propagates the dns-provider plugin's own failure (e.g. Namecheap's IP-allowlist error) back to the caller", async () => {
+      const { dispatch, store } = freshDispatcher({
+        roles: { dnsProvider: "dns-namecheap" },
+        pluginInvoker: async () => ({ ok: false, error: { code: "invoke_error", message: "add this host's WAN IP to the allowlist" } }),
+      });
+      grant(store, "cert-letsencrypt-dns01", "dns.record.write", { zones: ["example.tld"] });
+      await expect(
+        dispatch({
+          invocationId: "i1",
+          pluginId: "cert-letsencrypt-dns01",
+          method: "dns.setRecord",
+          args: { zone: "example.tld", record: { type: "TXT", name: "x", value: "y" } },
+        }),
+      ).rejects.toThrow(/allowlist/);
+    });
+
+    it("dns.query performs no resolution itself -- it's advisory logging only, always succeeds, never touches grants or the plugin invoker", async () => {
+      let invoked = false;
+      const { dispatch } = freshDispatcher({
+        pluginInvoker: async (): Promise<PluginInvokeResult> => {
+          invoked = true;
+          return { ok: true, result: {} };
+        },
+      });
+      const res = await dispatch({
+        invocationId: "i1",
+        pluginId: "cert-letsencrypt-dns01",
+        method: "dns.query",
+        args: { name: "_acme-challenge.example.tld", type: "TXT", result: ["token"] },
+      });
+      expect(res).toEqual({});
+      expect(invoked).toBe(false);
     });
   });
 });
