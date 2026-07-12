@@ -23,7 +23,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build
+        # tier1's `next build` collects page data by importing lib/session-db.ts,
+        # which opens its sqlite file at module load time -- same reason
+        # deploy/tier1.Dockerfile sets this for its own build stage. Without it,
+        # the build tries (and fails) to mkdir the real runtime path /data/state.
         run: pnpm -r build
+        env:
+          WANFW_TIER1STATE_DB: /tmp/build-tier1.sqlite3
+
+      - name: Typecheck
+        run: pnpm -r typecheck
 
       - name: Unit tests
         run: pnpm -r test
@@ -52,3 +61,8 @@ jobs:
       # refusal, out-of-grant rejection, wallMs timeout kill.
       - name: Run M1 plugin runtime acceptance
         run: bash test/integration/m1-plugin-runtime.sh
+
+      # M3 acceptance (spec §15): real ACME DNS-01 flow against a local
+      # Pebble CA -- wildcard issuance, renewal, TXT cleanup on all paths.
+      - name: Run Pebble ACME e2e
+        run: bash test/integration/pebble-e2e.sh
