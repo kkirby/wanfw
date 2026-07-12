@@ -1,0 +1,12 @@
+{
+  "manifestVersion": 1,
+  "id": "dns-namecheap",
+  "version": "0.1.0",
+  "frameworkApi": "^1.0.0",
+  "types": ["dns-provider"],
+  "entrypoint": "main.js",
+  "runtime": "node22",
+  "capabilities": [
+    { "cap": "secrets.read", "scope": { "names": ["dns-namecheap/*"] }, "reason": "read its own Namecheap API credentials (api-user, username, api-key)", "enforcement": "enforced" }
+  ]
+}

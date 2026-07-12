@@ -106,6 +106,15 @@ export async function runInvocation(job: InvocationJob, deps: ChildRunnerDeps): 
     stdio: ["pipe", "pipe", "pipe"],
   });
 
+  // Nothing else reads child.stderr; an uncaught exception/rejection in a
+  // plugin's entrypoint (a real thing that happens -- e.g. T4.2's
+  // dns-namecheap plugin hit one live) would otherwise vanish entirely,
+  // leaving only "connection closed" upstream with zero clue why. Prefixed
+  // so it's greppable in the pluginhost container's own log stream.
+  child.stderr.on("data", (chunk: Buffer) => {
+    process.stderr.write(`[plugin:${job.pluginId} stderr] ${chunk.toString()}`);
+  });
+
   const connection = new JsonRpcConnection(child.stdout, child.stdin);
   connection.registerMethod("host.call", async (params) => deps.hostApiHandler(params));
 
