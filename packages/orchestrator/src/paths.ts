@@ -9,12 +9,14 @@ export interface OrchestratorPaths {
   desiredDir: string;
   stagingDir: string;
   bundlesDir: string;
+  proxycfgDir: string;
   statusSocketDir: string;
   pluginSocketDir: string;
   adminSocketDir: string;
   statusSocketPath: string;
   pluginSocketPath: string;
   adminSocketPath: string;
+  dockerSocketPath?: string;
 }
 
 export function resolvePaths(env: NodeJS.ProcessEnv = process.env): OrchestratorPaths {
@@ -30,11 +32,13 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Orchestrator
     desiredDir: `${dataRoot}/desired`,
     stagingDir: `${dataRoot}/staging`,
     bundlesDir: `${dataRoot}/bundles`,
+    proxycfgDir: `${dataRoot}/proxycfg`,
     statusSocketDir,
     pluginSocketDir,
     adminSocketDir,
     statusSocketPath: `${statusSocketDir}/orch-status.sock`,
     pluginSocketPath: `${pluginSocketDir}/orch-plugin.sock`,
     adminSocketPath: `${adminSocketDir}/admin.sock`,
+    dockerSocketPath: env.WANFW_DOCKER_SOCKET_PATH,
   };
 }

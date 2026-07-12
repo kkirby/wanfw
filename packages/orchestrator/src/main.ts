@@ -21,10 +21,12 @@ import {
   buildPlanStage,
   buildValidateStage,
   buildGateStage,
+  buildExecuteStage,
   buildPlaceholderStage,
   buildRealPluginInvoker,
   type GateSnapshotHolder,
 } from "./reconciler/index.js";
+import { buildRealDockerClient } from "./execute/index.js";
 
 const log = createLogger("orchestrator");
 const paths = resolvePaths();
@@ -67,11 +69,12 @@ const pluginInvoker = buildRealPluginInvoker({
 });
 
 const gateSnapshotHolder: GateSnapshotHolder = { services: new Map() };
+const dockerClient = buildRealDockerClient(paths.dockerSocketPath);
 
-// Reconcile engine (T3.4-T3.7): level-triggered, single-flight, coalescing.
-// load/resolve/plan/validate/gate are real (T3.1/T3.3/T3.5/T3.6/T3.7);
-// EXECUTE/OBSERVE are placeholders until T3.8-T3.9 land, so the full
-// pipeline shape is already real and observable end to end.
+// Reconcile engine (T3.4-T3.8): level-triggered, single-flight, coalescing.
+// load/resolve/plan/validate/gate/execute are real (T3.1/T3.3/T3.5-T3.8);
+// OBSERVE is a placeholder until T3.9 lands, so the full pipeline shape is
+// already real and observable end to end.
 const reconcileEngine = new ReconcileEngine({
   stages: [
     buildLoadStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore }),
@@ -79,7 +82,7 @@ const reconcileEngine = new ReconcileEngine({
     buildPlanStage({ invokePlugin: pluginInvoker }),
     buildValidateStage({ store: stateStore }),
     buildGateStage({ store: stateStore }, gateSnapshotHolder),
-    buildPlaceholderStage("execute"),
+    buildExecuteStage({ store: stateStore, docker: dockerClient, proxycfgDir: paths.proxycfgDir }),
     buildPlaceholderStage("observe"),
   ],
   log,

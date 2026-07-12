@@ -15,10 +15,12 @@
     "@wanfw/core-schemas": "workspace:*",
     "@wanfw/pluginhost": "workspace:*",
     "better-sqlite3": "^11.10.0",
-    "chokidar": "^4.0.3"
+    "chokidar": "^4.0.3",
+    "dockerode": "^5.0.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/dockerode": "^4.0.1",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4"
   }

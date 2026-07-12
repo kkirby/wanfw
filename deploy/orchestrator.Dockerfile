@@ -13,7 +13,7 @@ FROM deps AS build
 RUN pnpm --filter @wanfw/core-schemas... --filter @wanfw/orchestrator... --filter @wanfw/wanfwctl... build
 
 FROM base AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+RUN apt-get update && apt-get install -y --no-install-recommends curl gosu \
     && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system wanfw && useradd --system --gid wanfw --home-dir /app --shell /usr/sbin/nologin wanfw
 WORKDIR /app
@@ -23,7 +23,9 @@ RUN mkdir -p /data/state /data/secrets /data/desired /data/status /data/staging 
     && chown -R wanfw:wanfw /data /run/wanfw /run/wanfw-admin
 RUN printf '#!/bin/sh\nexec node /app/packages/wanfwctl/dist/main.js "$@"\n' > /usr/local/bin/wanfwctl-inner \
     && chmod +x /usr/local/bin/wanfwctl-inner
+COPY deploy/orchestrator-entrypoint.sh /usr/local/bin/orchestrator-entrypoint.sh
+RUN chmod +x /usr/local/bin/orchestrator-entrypoint.sh
 ENV NODE_ENV=production
-USER wanfw
 WORKDIR /app/packages/orchestrator
+ENTRYPOINT ["/usr/local/bin/orchestrator-entrypoint.sh"]
 CMD ["node", "dist/main.js"]
