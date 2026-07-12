@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { hashBundleDir } from "@wanfw/core-schemas";
-import { runInvocation, buildSpawnCommand, HashMismatchError, type InvocationJob, type SpawnFn } from "./child-runner.js";
+import { runInvocation, buildSpawnCommand, childEnv, HashMismatchError, type InvocationJob, type SpawnFn } from "./child-runner.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, "__fixtures__");
@@ -78,6 +78,34 @@ describe("runInvocation: timeout kill", () => {
     expect(result.error?.code).toBe("timeout");
     expect(elapsed).toBeLessThan(2000);
   }, 5000);
+});
+
+describe("childEnv: non-secret endpoint-override passthrough (T4.7)", () => {
+  const ALLOWED = ["WANFW_ACME_DIRECTORY_URL", "WANFW_DNS01_RESOLVER", "WANFW_CHALLTESTSRV_URL", "NODE_TLS_REJECT_UNAUTHORIZED"] as const;
+
+  afterEach(() => {
+    for (const key of ALLOWED) delete process.env[key];
+    delete process.env.WANFW_SOME_SECRET;
+  });
+
+  it("is just PATH when none of the allowlisted vars are set on the pluginhost process", () => {
+    expect(childEnv()).toEqual({ PATH: "/usr/bin:/bin" });
+  });
+
+  it("forwards every allowlisted var that is set, verbatim", () => {
+    process.env.WANFW_ACME_DIRECTORY_URL = "https://pebble:14000/dir";
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+    expect(childEnv()).toEqual({
+      PATH: "/usr/bin:/bin",
+      WANFW_ACME_DIRECTORY_URL: "https://pebble:14000/dir",
+      NODE_TLS_REJECT_UNAUTHORIZED: "0",
+    });
+  });
+
+  it("never forwards an arbitrary env var outside the allowlist", () => {
+    process.env.WANFW_SOME_SECRET = "should-never-leak";
+    expect(childEnv()).toEqual({ PATH: "/usr/bin:/bin" });
+  });
 });
 
 describe("runInvocation: invocation isolation", () => {

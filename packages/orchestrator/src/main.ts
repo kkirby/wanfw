@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { createLogger } from "./logger.js";
 import { resolvePaths } from "./paths.js";
@@ -37,8 +37,31 @@ const paths = resolvePaths();
 // Tolerate a missing framework document: this is pre-init state (T5.3 writes
 // the real framework doc later). Initialize data dirs so a fresh volume boots
 // cleanly.
-for (const dir of [paths.stateDir, paths.statusDir, paths.desiredDir, paths.stagingDir, paths.bundlesDir, paths.secretsDir, paths.certsDir]) {
+for (const dir of [paths.stateDir, paths.statusDir, paths.desiredDir, paths.stagingDir, paths.bundlesDir, paths.secretsDir, paths.certsDir, paths.proxycfgDir]) {
   mkdirSync(dir, { recursive: true });
+}
+
+// A placeholder Caddyfile, written unconditionally at boot if none exists
+// yet (T4.7 fix, found by live verification): Docker seeds a genuinely
+// *empty* named volume from whichever container mounts it first, copying
+// in that image's own content at the mount path, owned by that image's own
+// uid. An empty directory (just `mkdirSync` above, zero regular files)
+// still counts as empty for this purpose -- if the proxy (caddy:2)
+// container's read-only mount happens to be created before the
+// orchestrator ever writes an actual file into `proxycfgDir`, the volume
+// gets seeded with Caddy's own default sample config instead, owned by
+// Caddy's uid, and every later orchestrator write fails with EACCES
+// forever after (EXECUTE creates the proxy container before it ever
+// writes/reloads its config, since the very first reload needs a running
+// container to `docker exec` into). Writing one real file here, at boot --
+// always before EXECUTE could possibly run -- keeps the volume non-empty
+// from the start, so Docker's copy-up seeding never triggers regardless of
+// container creation order. EXECUTE overwrites this with the real rendered
+// config on its first pass; content doesn't matter, only that a real file
+// with real (orchestrator) ownership exists first.
+const placeholderCaddyfile = `${paths.proxycfgDir}/Caddyfile`;
+if (!existsSync(placeholderCaddyfile)) {
+  writeFileSync(placeholderCaddyfile, ":443, :80 {\n\trespond 404\n}\n");
 }
 
 log.info("orchestrator starting", { version: ORCHESTRATOR_VERSION });
@@ -96,7 +119,13 @@ const reconcileEngine = new ReconcileEngine({
     }),
     buildValidateStage({ store: stateStore }),
     buildGateStage({ store: stateStore }, gateSnapshotHolder),
-    buildExecuteStage({ store: stateStore, docker: dockerClient, proxycfgDir: paths.proxycfgDir }),
+    buildExecuteStage({
+      store: stateStore,
+      docker: dockerClient,
+      proxycfgDir: paths.proxycfgDir,
+      certsVolumeName: paths.certsVolumeName,
+      proxycfgVolumeName: paths.proxycfgVolumeName,
+    }),
     buildObserveStage({ store: stateStore, docker: dockerClient, statusDir: paths.statusDir }),
   ],
   log,

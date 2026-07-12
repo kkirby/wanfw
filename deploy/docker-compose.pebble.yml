@@ -1,0 +1,43 @@
+# Pebble e2e overlay (T4.7): adds Let's Encrypt's own ACME v2 test server
+# (Pebble) plus its companion pebble-challtestsrv, and points pluginhost at
+# them instead of the real Namecheap/production-LE endpoints this stack
+# uses in `docker-compose.yml`. Test-only -- never composed alongside
+# production. Bring up with:
+#   docker compose -f docker-compose.yml -f docker-compose.pebble.yml up -d --build
+#
+# Pebble validates DNS-01 challenges by querying pebble-challtestsrv's own
+# fake authoritative DNS server (`-dnsserver` flag below), not real DNS --
+# this plugin's `dns-mock` builtin (T4.7) is the piece that tells
+# challtestsrv what to answer, via its HTTP management API on :8055.
+#
+# Pebble signs everything with its own throwaway test root, which Node
+# doesn't trust by default; NODE_TLS_REJECT_UNAUTHORIZED=0 on pluginhost
+# is scoped to this overlay only and must never appear in the production
+# compose file.
+services:
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:latest
+    container_name: wanfw-pebble
+    # The image's ENTRYPOINT is the pebble binary itself (distroless, no
+    # shell) -- these are its flags, not a command name.
+    command: ["-config", "/test/config/pebble-config.json", "-dnsserver", "pebble-challtestsrv:8053"]
+    networks: [wanfw_egress]
+    environment:
+      PEBBLE_VA_NOSLEEP: "1" # skip Pebble's artificial validation delay so the e2e run doesn't idle for it
+      PEBBLE_WFE_NONCEREJECT: "0"
+
+  pebble-challtestsrv:
+    image: ghcr.io/letsencrypt/pebble-challtestsrv:latest
+    container_name: wanfw-pebble-challtestsrv
+    command: ["-management", ":8055", "-dnsserver", ":8053"]
+    networks: [wanfw_egress]
+
+  pluginhost:
+    environment:
+      WANFW_ACME_DIRECTORY_URL: https://pebble:14000/dir
+      WANFW_CHALLTESTSRV_URL: http://pebble-challtestsrv:8055
+      WANFW_DNS01_RESOLVER: pebble-challtestsrv:8053
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
+    depends_on:
+      - pebble
+      - pebble-challtestsrv

@@ -1,8 +1,39 @@
 import { createInterface } from "node:readline";
 import { request as httpsRequest } from "node:https";
-import { resolveTxt as dnsResolveTxt } from "node:dns/promises";
+import { Resolver, lookup as dnsLookup } from "node:dns/promises";
 import { certEnsure, type CertEnsureDeps, type CertEnsureInput, type DnsRecord } from "./cert-ensure.js";
 import type { AcmeHttpFn } from "./acme-client.js";
+
+/**
+ * `WANFW_DNS01_RESOLVER` (host[:port], T4.7): against real DNS providers
+ * this plugin's propagation polling and the ACME server's own DNS-01
+ * validation both hit the same real, public authoritative chain, so the
+ * default system resolver is correct. Against Pebble, the two diverge --
+ * Pebble validates by querying pebble-challtestsrv's own fake DNS server
+ * directly (`-dnsserver` flag), not real DNS, so this plugin's own
+ * propagation check needs pointing at the exact same fake server or it
+ * would poll a real DNS chain that will NXDOMAIN forever and time out,
+ * even though the actual ACME validation Pebble performs would succeed.
+ */
+let resolverReady: Promise<Resolver> | undefined;
+function getResolver(): Promise<Resolver> {
+  if (!resolverReady) {
+    resolverReady = (async () => {
+      const resolver = new Resolver();
+      const override = process.env.WANFW_DNS01_RESOLVER;
+      if (override) {
+        const [host, port] = override.split(":");
+        // node:dns's setServers requires an IP, not a hostname -- resolve
+        // the (Docker-service-name) host once via the default resolver
+        // first, then pin this dedicated resolver to that address.
+        const { address } = await dnsLookup(host!);
+        resolver.setServers([port ? `${address}:${port}` : address]);
+      }
+      return resolver;
+    })();
+  }
+  return resolverReady;
+}
 
 /**
  * Hand-rolled NDJSON JSON-RPC loop, same reasoning and same nested-host.call
@@ -25,11 +56,25 @@ function callHost(method: string, args: unknown): Promise<unknown> {
   });
 }
 
+// RFC 8555 doesn't mandate a User-Agent, and production Let's Encrypt
+// tolerates its absence (T4.4's live verification against it never
+// surfaced this) -- but Pebble (T4.7) enforces the ACME best-practice
+// requirement strictly and 400s every request without one. Sent
+// unconditionally since a well-behaved client should send it regardless
+// of which server happens to be lenient.
+const USER_AGENT = "wanfw-cert-letsencrypt-dns01/0.1.0";
+
 const httpFn: AcmeHttpFn = (method, url, body) => {
   return new Promise((resolve, reject) => {
     const req = httpsRequest(
       url,
-      { method, headers: body ? { "content-type": "application/jose+json", "content-length": Buffer.byteLength(body) } : {} },
+      {
+        method,
+        headers: {
+          "user-agent": USER_AGENT,
+          ...(body ? { "content-type": "application/jose+json", "content-length": Buffer.byteLength(body) } : {}),
+        },
+      },
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (c: Buffer) => chunks.push(c));
@@ -70,7 +115,8 @@ const deps: CertEnsureDeps = {
   },
   resolveTxt: async (name) => {
     try {
-      const records = await dnsResolveTxt(name);
+      const resolver = await getResolver();
+      const records = await resolver.resolveTxt(name);
       return records.map((chunks) => chunks.join(""));
     } catch {
       return []; // NXDOMAIN / not yet propagated -- treated as "not visible yet", not an error

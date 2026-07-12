@@ -48,7 +48,7 @@ describe("EXECUTE stage (T3.8)", () => {
       routes: [],
       certRequirements: { mode: "internal-ca", names: [] },
     };
-    const stage = buildExecuteStage({ store, docker, proxycfgDir });
+    const stage = buildExecuteStage({ store, docker, proxycfgDir, certsVolumeName: "wanfw_certs", proxycfgVolumeName: "wanfw_proxycfg" });
 
     const ctx1 = { desiredState, planGraph } as unknown as ReconcileRunContext;
     const first = await stage.run(ctx1);
@@ -81,7 +81,7 @@ describe("EXECUTE stage (T3.8)", () => {
       routes: [],
       certRequirements: { mode: "internal-ca", names: [] },
     };
-    const stage = buildExecuteStage({ store, docker, proxycfgDir });
+    const stage = buildExecuteStage({ store, docker, proxycfgDir, certsVolumeName: "wanfw_certs", proxycfgVolumeName: "wanfw_proxycfg" });
     const ctx = { desiredState, planGraph } as unknown as ReconcileRunContext;
     await stage.run(ctx);
 
@@ -108,7 +108,7 @@ describe("EXECUTE stage (T3.8)", () => {
     const gateSnapshot = new Map<string, GatedService>([
       ["jellyfin", { serviceId: "jellyfin", tier: "powerful", projectionHash: "h", humanRendering: "x", approved: false }],
     ]);
-    const stage = buildExecuteStage({ store, docker, proxycfgDir });
+    const stage = buildExecuteStage({ store, docker, proxycfgDir, certsVolumeName: "wanfw_certs", proxycfgVolumeName: "wanfw_proxycfg" });
     const result = await stage.run({ desiredState, planGraph, gateSnapshot } as unknown as ReconcileRunContext);
 
     expect(result.ok).toBe(true);
@@ -129,7 +129,7 @@ describe("EXECUTE stage (T3.8)", () => {
     const gateSnapshot = new Map<string, GatedService>([
       ["jellyfin", { serviceId: "jellyfin", tier: "powerful", projectionHash: "h", humanRendering: "x", approved: true }],
     ]);
-    const stage = buildExecuteStage({ store, docker, proxycfgDir });
+    const stage = buildExecuteStage({ store, docker, proxycfgDir, certsVolumeName: "wanfw_certs", proxycfgVolumeName: "wanfw_proxycfg" });
     const result = await stage.run({ desiredState, planGraph, gateSnapshot } as unknown as ReconcileRunContext);
 
     expect(result.ok).toBe(true);
@@ -147,7 +147,7 @@ describe("EXECUTE stage (T3.8)", () => {
       routes: [],
       certRequirements: { mode: "internal-ca", names: [] },
     };
-    const stage = buildExecuteStage({ store, docker, proxycfgDir });
+    const stage = buildExecuteStage({ store, docker, proxycfgDir, certsVolumeName: "wanfw_certs", proxycfgVolumeName: "wanfw_proxycfg" });
 
     // Simulate a "crash": force createContainer to throw once, as if the
     // process died mid-syscall. The stage should fail this run (journal
@@ -185,7 +185,7 @@ describe("EXECUTE stage (T3.8)", () => {
       routes: [],
       certRequirements: { mode: "internal-ca", names: [] },
     };
-    const stage = buildExecuteStage({ store, docker, proxycfgDir });
+    const stage = buildExecuteStage({ store, docker, proxycfgDir, certsVolumeName: "wanfw_certs", proxycfgVolumeName: "wanfw_proxycfg" });
     const result = await stage.run({ desiredState, planGraph } as unknown as ReconcileRunContext);
 
     expect(result.ok).toBe(true);
@@ -208,7 +208,7 @@ describe("EXECUTE stage (T3.8)", () => {
       proxyRender: { filename: "Caddyfile", content: "kavita.example.tld {\n\treverse_proxy wanfw_kavita:5000\n}\n", reloadCmd: ["caddy", "reload"] },
       certRequirements: { mode: "internal-ca", names: [] },
     };
-    const stage = buildExecuteStage({ store, docker, proxycfgDir });
+    const stage = buildExecuteStage({ store, docker, proxycfgDir, certsVolumeName: "wanfw_certs", proxycfgVolumeName: "wanfw_proxycfg" });
     const result = await stage.run({ desiredState, planGraph } as unknown as ReconcileRunContext);
 
     expect(result.ok).toBe(true);

@@ -132,6 +132,19 @@ export async function certEnsure(deps: CertEnsureDeps, input: CertEnsureInput): 
     nonce = fetched.nextNonce;
     const authorization: AcmeAuthorization = fetched.authorization;
 
+    // RFC 8555 §7.1.4: a server MAY reuse an existing valid authorization
+    // for an identifier instead of issuing a fresh pending one -- both
+    // Pebble (its own boot log: "attempt authz reuse for each identifier
+    // 50% of the time") and real production Let's Encrypt do this. An
+    // already-valid authorization's challenges are no longer in "pending"
+    // state, so POSTing a challenge response against one is a protocol
+    // violation the server is entitled to reject; skip straight past this
+    // authorization (no TXT record needed at all) rather than always
+    // attempting to complete it. Found live (T4.7): without this check,
+    // a renewal request for an already-authorized name silently failed
+    // every time Pebble happened to reuse the prior authorization.
+    if (authorization.status === "valid") continue;
+
     const challenge = authorization.challenges.find((c) => c.type === "dns-01");
     if (!challenge) throw new Error(`no dns-01 challenge offered for '${authorization.identifier.value}'`);
 

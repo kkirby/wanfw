@@ -19,6 +19,9 @@ export interface OrchestratorPaths {
   pluginSocketPath: string;
   adminSocketPath: string;
   dockerSocketPath?: string;
+  /** Real Docker volume names backing the proxy container's certs/proxycfg mounts (T4.7) -- not derivable from `dataRoot` since these are volumes the orchestrator attaches *other* containers to, not its own mount paths. Compose prefixes every named volume with the project name, so under `docker-compose.yml`'s `name: wanfw` these are `wanfw_wanfw_certs`/`wanfw_wanfw_proxycfg`, not the bare `wanfw_certs`/`wanfw_proxycfg` the volume keys read as. */
+  certsVolumeName: string;
+  proxycfgVolumeName: string;
 }
 
 export function resolvePaths(env: NodeJS.ProcessEnv = process.env): OrchestratorPaths {
@@ -44,5 +47,7 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Orchestrator
     pluginSocketPath: `${pluginSocketDir}/orch-plugin.sock`,
     adminSocketPath: `${adminSocketDir}/admin.sock`,
     dockerSocketPath: env.WANFW_DOCKER_SOCKET_PATH,
+    certsVolumeName: env.WANFW_CERTS_VOLUME_NAME ?? "wanfw_certs",
+    proxycfgVolumeName: env.WANFW_PROXYCFG_VOLUME_NAME ?? "wanfw_proxycfg",
   };
 }

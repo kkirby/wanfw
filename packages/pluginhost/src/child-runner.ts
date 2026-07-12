@@ -78,6 +78,35 @@ export function buildSpawnCommand(
   return { command: process.execPath, args: [entrypointAbsPath] };
 }
 
+/**
+ * Non-secret endpoint-override config, explicitly allowlisted for
+ * passthrough into every spawned child's otherwise-clean env (ADR-3: no
+ * ambient host secrets/config leak to children by default). Every one of
+ * these overrides an ACME/DNS *endpoint URL*, never a credential --
+ * credentials only ever reach a plugin via `secrets.get`, never env, and
+ * that invariant is unaffected by this list. Exists solely so T4.7's
+ * Pebble e2e harness can point cert-letsencrypt-dns01/dns-mock at Pebble
+ * and pebble-challtestsrv instead of production endpoints, by setting
+ * these on the pluginhost container itself (`docker-compose.pebble.yml`);
+ * in the real production compose file none of these are set, so this
+ * passthrough is a no-op there.
+ */
+const ENV_PASSTHROUGH_ALLOWLIST = [
+  "WANFW_ACME_DIRECTORY_URL",
+  "WANFW_DNS01_RESOLVER",
+  "WANFW_CHALLTESTSRV_URL",
+  "NODE_TLS_REJECT_UNAUTHORIZED",
+] as const;
+
+export function childEnv(): Record<string, string> {
+  const env: Record<string, string> = { PATH: "/usr/bin:/bin" };
+  for (const key of ENV_PASSTHROUGH_ALLOWLIST) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 export class HashMismatchError extends Error {}
 
 /** Verifies the bundle hash, spawns one child, bridges NDJSON JSON-RPC, enforces the wall-clock timeout. */
@@ -99,8 +128,10 @@ export async function runInvocation(job: InvocationJob, deps: ChildRunnerDeps): 
     // Clean env: no host secrets, no ambient config. PATH is not a secret --
     // it's kept minimal so `prlimit` (the Linux rlimit wrapper) resolves via
     // execvp; the actual node invocation always uses an absolute path
-    // (process.execPath) regardless, so PATH isn't load-bearing there.
-    env: { PATH: "/usr/bin:/bin" },
+    // (process.execPath) regardless, so PATH isn't load-bearing there. The
+    // only additions are the explicit non-secret endpoint-override
+    // allowlist above (empty in production).
+    env: childEnv(),
     uid: deps.runAsUid,
     gid: deps.runAsGid,
     stdio: ["pipe", "pipe", "pipe"],

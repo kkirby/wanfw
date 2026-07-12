@@ -31,8 +31,8 @@ function fakeAcmeServer(options?: { authStatus?: string; failFinalize?: boolean 
     if (url === "https://acme.test/authz/1") {
       return json(200, {
         identifier: { type: "dns", value: "example.tld" },
-        status: authStatus === "valid" || authStatus === "pending-then-valid" ? "pending" : authStatus,
-        challenges: [{ type: "dns-01", url: "https://acme.test/challenge/1", token: "test-token-123", status: "pending" }],
+        status: authStatus === "already-valid" ? "valid" : authStatus === "valid" || authStatus === "pending-then-valid" ? "pending" : authStatus,
+        challenges: [{ type: "dns-01", url: "https://acme.test/challenge/1", token: "test-token-123", status: authStatus === "already-valid" ? "valid" : "pending" }],
       }, nonce);
     }
     if (url === "https://acme.test/challenge/1") {
@@ -147,6 +147,19 @@ describe("certEnsure (cert.ensure task, §9 DNS-01 flow)", () => {
     expect(certsStoreCalls).toHaveLength(1);
     expect((certsStoreCalls[0] as { certPem: string }).certPem).toContain("BEGIN CERTIFICATE");
     expect((certsStoreCalls[0] as { name: string }).name).toBe("primary");
+  });
+
+  it("an already-valid (server-reused) authorization skips DNS-01 entirely -- no TXT set, no challenge response attempted (T4.7: Pebble/production LE both reuse authorizations)", async () => {
+    const server = fakeAcmeServer({ authStatus: "already-valid" });
+    const { deps, dnsSetCalls, dnsDeleteCalls, certsStoreCalls } = baseDeps({ http: server.http });
+
+    const result = await certEnsure(deps, { zone: "example.tld", names: ["example.tld"], certName: "primary" });
+
+    expect(result).toEqual({});
+    expect(dnsSetCalls).toHaveLength(0);
+    expect(dnsDeleteCalls).toHaveLength(0);
+    expect(server.calls.some((c) => c.url === "https://acme.test/challenge/1")).toBe(false);
+    expect(certsStoreCalls).toHaveLength(1);
   });
 
   it("a wildcard identifier ('*.example.tld') challenges under the base domain's _acme-challenge name, not a double-wildcard name", async () => {

@@ -35,6 +35,14 @@ services:
     image: wanfw/orchestrator:dev
     container_name: wanfw-orchestrator
     network_mode: "none"
+    environment:
+      # Compose always names a project's volumes `<project>_<key>` (T4.7
+      # fix): this file's `name: wanfw` plus the volume keys below means
+      # the volumes the proxy container actually needs to mount are
+      # `wanfw_wanfw_certs`/`wanfw_wanfw_proxycfg`, not the bare
+      # `wanfw_certs`/`wanfw_proxycfg` `paths.ts` defaults to.
+      WANFW_CERTS_VOLUME_NAME: wanfw_wanfw_certs
+      WANFW_PROXYCFG_VOLUME_NAME: wanfw_wanfw_proxycfg
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - wanfw_desired:/data/desired:ro

@@ -19,14 +19,28 @@ describe("proxy-container (§8.4, ADR-9 core-emitted proxy)", () => {
   });
 
   it("builds a proxy ContainerSpec dual-homed onto the exposure network plus every service network, read-only cert/proxycfg mounts", () => {
-    const spec = buildProxyContainerSpec("wanfw_exposure", ["wanfw_svc_jellyfin", "wanfw_svc_kavita"], [443, 80]);
+    const spec = buildProxyContainerSpec(
+      "wanfw_exposure",
+      ["wanfw_svc_jellyfin", "wanfw_svc_kavita"],
+      [443, 80],
+      "wanfw_wanfw_certs",
+      "wanfw_wanfw_proxycfg",
+    );
 
     expect(spec.image).toBe("caddy:2");
     expect(spec.networks).toEqual(["wanfw_exposure", "wanfw_svc_jellyfin", "wanfw_svc_kavita"]);
     expect(spec.ports).toEqual([443, 80]);
     expect(spec.mounts).toEqual([
-      { type: "volume", source: "wanfw_certs", target: "/data/certs", readOnly: true },
-      { type: "volume", source: "wanfw_proxycfg", target: "/etc/caddy", readOnly: true },
+      { type: "volume", source: "wanfw_wanfw_certs", target: "/data/certs", readOnly: true },
+      { type: "volume", source: "wanfw_wanfw_proxycfg", target: "/etc/caddy", readOnly: true },
+    ]);
+  });
+
+  it("passes the real (project-prefixed) volume names through verbatim, whatever the caller supplies", () => {
+    const spec = buildProxyContainerSpec("net", [], [], "some-other-certs-vol", "some-other-proxycfg-vol");
+    expect(spec.mounts).toEqual([
+      { type: "volume", source: "some-other-certs-vol", target: "/data/certs", readOnly: true },
+      { type: "volume", source: "some-other-proxycfg-vol", target: "/etc/caddy", readOnly: true },
     ]);
   });
 });

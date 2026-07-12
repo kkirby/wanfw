@@ -14,6 +14,9 @@ export interface ExecuteStageDeps {
   store: StateStore;
   docker: DockerClient;
   proxycfgDir: string;
+  /** Real Docker volume names for the proxy container's certs/proxycfg mounts (T4.7) -- see `buildProxyContainerSpec`'s own comment for why these aren't the bare `wanfw_certs`/`wanfw_proxycfg` literals. */
+  certsVolumeName: string;
+  proxycfgVolumeName: string;
 }
 
 function serviceNetworkName(serviceId: string): string {
@@ -115,7 +118,13 @@ export function buildExecuteStage(deps: ExecuteStageDeps): NamedStage {
             const exposureNetResult = await ensureNetwork(deps.docker, exposureNetwork, { plan: planId, core: true });
             journal(exposureNetResult.step, {}, exposureNetResult);
 
-            const proxySpec = buildProxyContainerSpec(exposureNetwork, serviceNetworks, hostPorts);
+            const proxySpec = buildProxyContainerSpec(
+              exposureNetwork,
+              serviceNetworks,
+              hostPorts,
+              deps.certsVolumeName,
+              deps.proxycfgVolumeName,
+            );
             const proxyResult = await ensureContainer(deps.docker, PROXY_CONTAINER_NAME, proxySpec, {
               plan: planId,
               core: true,

@@ -10,7 +10,7 @@ COPY plugins ./plugins
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
-RUN pnpm --filter @wanfw/core-schemas... --filter @wanfw/pluginhost... --filter @wanfw/plugin-sdk... --filter @wanfw/plugin-deploy-docker... --filter @wanfw/plugin-network-bridge... --filter @wanfw/plugin-proxy-caddy... --filter @wanfw/plugin-dns-namecheap... --filter @wanfw/plugin-cert-letsencrypt-dns01... build
+RUN pnpm --filter @wanfw/core-schemas... --filter @wanfw/pluginhost... --filter @wanfw/plugin-sdk... --filter @wanfw/plugin-deploy-docker... --filter @wanfw/plugin-network-bridge... --filter @wanfw/plugin-proxy-caddy... --filter @wanfw/plugin-dns-namecheap... --filter @wanfw/plugin-cert-letsencrypt-dns01... --filter @wanfw/plugin-dns-mock... build
 
 FROM base AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends util-linux \
@@ -27,9 +27,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends util-linux \
 RUN groupadd --system wanfw && useradd --system --gid wanfw --home-dir /app --shell /usr/sbin/nologin wanfw \
     && groupadd --system wanfw-plugin && useradd --system --gid wanfw-plugin --home-dir /app --shell /usr/sbin/nologin wanfw-plugin
 WORKDIR /app
+# Each builtin gets its own `{"type":"module"}` package.json (T4.7): with
+# none present Node has to sniff dist/main.js's syntax and silently
+# re-parse it as ESM on every single invocation ("Reparsing as ES module"
+# warning) -- pure wasted parse-time work, worth eliminating even though it
+# turned out not to be the cause of the real bug found in the same
+# investigation (see the `node:net` comment in dns-mock/src/main.ts).
+# `supervisor.ts`'s `builtins.read` walks each builtin directory
+# recursively, so this file is picked up and copied into wanfw_bundles
+# automatically at trust time, no other code changes needed.
 COPY --from=build /app /app
 RUN mkdir -p /data/bundles /run/wanfw \
-      /app/builtins/deploy-docker/dist /app/builtins/network-bridge/dist /app/builtins/proxy-caddy/dist /app/builtins/dns-namecheap/dist /app/builtins/cert-letsencrypt-dns01/dist \
+      /app/builtins/deploy-docker/dist /app/builtins/network-bridge/dist /app/builtins/proxy-caddy/dist /app/builtins/dns-namecheap/dist /app/builtins/cert-letsencrypt-dns01/dist /app/builtins/dns-mock/dist \
     && cp /app/plugins/deploy-docker/manifest.json /app/plugins/deploy-docker/config-schema.json /app/builtins/deploy-docker/ \
     && cp /app/plugins/deploy-docker/dist/main.js /app/plugins/deploy-docker/dist/plan.js /app/builtins/deploy-docker/dist/ \
     && cp /app/plugins/network-bridge/manifest.json /app/builtins/network-bridge/ \
@@ -40,6 +49,11 @@ RUN mkdir -p /data/bundles /run/wanfw \
     && cp /app/plugins/dns-namecheap/dist/main.js /app/plugins/dns-namecheap/dist/apply.js /app/plugins/dns-namecheap/dist/namecheap-client.js /app/builtins/dns-namecheap/dist/ \
     && cp /app/plugins/cert-letsencrypt-dns01/manifest.json /app/builtins/cert-letsencrypt-dns01/ \
     && cp /app/plugins/cert-letsencrypt-dns01/dist/main.js /app/plugins/cert-letsencrypt-dns01/dist/cert-ensure.js /app/plugins/cert-letsencrypt-dns01/dist/acme-client.js /app/plugins/cert-letsencrypt-dns01/dist/jws.js /app/plugins/cert-letsencrypt-dns01/dist/csr.js /app/plugins/cert-letsencrypt-dns01/dist/der.js /app/builtins/cert-letsencrypt-dns01/dist/ \
+    && cp /app/plugins/dns-mock/manifest.json /app/builtins/dns-mock/ \
+    && cp /app/plugins/dns-mock/dist/main.js /app/plugins/dns-mock/dist/apply.js /app/builtins/dns-mock/dist/ \
+    && for d in deploy-docker network-bridge proxy-caddy dns-namecheap cert-letsencrypt-dns01 dns-mock; do \
+         echo '{"type":"module"}' > /app/builtins/$d/package.json; \
+       done \
     && chown -R wanfw:wanfw /data /run/wanfw /app/builtins
 ENV NODE_ENV=production
 ENV WANFW_BUILTINS_DIR=/app/builtins
