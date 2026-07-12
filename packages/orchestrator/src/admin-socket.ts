@@ -14,6 +14,8 @@ import {
   invokeTrustedPlugin,
 } from "./trust/index.js";
 import { publishComposedSchema } from "./composed-schema/index.js";
+import { canonicalApprovalPayload } from "./signing-key.js";
+import type { GateSnapshotHolder } from "./reconciler/index.js";
 
 /** Mutable holder so `key import`/`key rotate` can swap the live manager instance. */
 export interface SigningKeyHolder {
@@ -35,6 +37,8 @@ export interface AdminSocketDeps {
   stagingDir: string;
   bundlesDir: string;
   statusDir: string;
+  gateSnapshotHolder: GateSnapshotHolder;
+  onApprovalChange?: () => void;
 }
 
 /**
@@ -199,6 +203,54 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
       }
       return { status: 502, body: { error: "invoke_failed", message: (err as Error).message } };
     }
+  });
+
+  router.register("GET", "/plans", async ({ req }) => {
+    const url = new URL(req.url ?? "/", "http://unix");
+    const all = [...deps.gateSnapshotHolder.services.values()];
+    const plans = url.searchParams.get("pending") === "true" ? all.filter((s) => !s.approved) : all;
+    return { status: 200, body: { plans } };
+  });
+
+  router.register("GET", "/plans/:id", async ({ params }) => {
+    const plan = deps.gateSnapshotHolder.services.get(params.id!);
+    if (!plan) return { status: 404, body: { error: "not_found", message: `no gated plan for service ${params.id}` } };
+    return { status: 200, body: plan };
+  });
+
+  router.register("POST", "/plans/approve", async ({ body }) => {
+    const { serviceId, projectionHash } = (body ?? {}) as { serviceId?: string; projectionHash?: string };
+    let plan = projectionHash
+      ? [...deps.gateSnapshotHolder.services.values()].find((s) => s.projectionHash === projectionHash)
+      : serviceId
+        ? deps.gateSnapshotHolder.services.get(serviceId)
+        : undefined;
+    if (!plan) {
+      return { status: 404, body: { error: "not_found", message: "no matching pending plan (it may already be approved, or the reconciler hasn't produced it yet)" } };
+    }
+
+    const payload = canonicalApprovalPayload(plan.projectionHash, plan.serviceId, plan.humanRendering);
+    store.insertApproval({
+      projection_hash: plan.projectionHash,
+      service_id: plan.serviceId,
+      human_rendering: plan.humanRendering,
+      sig: signingKeyHolder.manager.sign(payload),
+      approved_at: new Date().toISOString(),
+    });
+    auditLog.append({ type: "plan.approve", details: { serviceId: plan.serviceId, projectionHash: plan.projectionHash } });
+    deps.onApprovalChange?.();
+    return { status: 200, body: { approved: true, serviceId: plan.serviceId, projectionHash: plan.projectionHash } };
+  });
+
+  router.register("POST", "/plans/revoke", async ({ body }) => {
+    const { projectionHash } = (body ?? {}) as { projectionHash?: string };
+    if (!projectionHash) {
+      return { status: 400, body: { error: "usage", message: "projectionHash is required" } };
+    }
+    store.revokeApproval(projectionHash);
+    auditLog.append({ type: "plan.revoke", details: { projectionHash } });
+    deps.onApprovalChange?.();
+    return { status: 200, body: { revoked: true, projectionHash } };
   });
 
   return router;

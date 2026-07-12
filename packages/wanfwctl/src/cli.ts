@@ -227,6 +227,59 @@ export function buildProgram(deps: CliDeps): Command {
       );
     });
 
+  const plan = program.command("plan").description("Powerful-plan approvals (ADR-4, ADR-6)");
+
+  plan
+    .command("list")
+    .description("List gated plans (pending approval, or all)")
+    .option("--pending", "list only plans awaiting approval")
+    .action(async (opts: { pending?: boolean }) => {
+      const path = opts.pending ? "/plans?pending=true" : "/plans";
+      await withAdminRequest(deps, "GET", path, undefined, (body) => {
+        deps.stdout(JSON.stringify(body, null, 2));
+      });
+    });
+
+  plan
+    .command("show <serviceId>")
+    .description("Show a gated plan's human-rendered projection")
+    .action(async (serviceId: string) => {
+      await withAdminRequest(deps, "GET", `/plans/${encodeURIComponent(serviceId)}`, undefined, (body) => {
+        deps.stdout(JSON.stringify(body, null, 2));
+      });
+    });
+
+  plan
+    .command("approve")
+    .description("Approve a pending powerful plan, by service id or exact projection hash")
+    .option("--service <id>", "approve by service id (the currently pending plan for that service)")
+    .option("--hash <projectionHash>", "approve by exact projection hash")
+    .action(async (opts: { service?: string; hash?: string }) => {
+      if (!opts.service && !opts.hash) {
+        deps.stderr("usage: wanfwctl plan approve (--service <id> | --hash <projectionHash>)");
+        process.exitCode = EXIT_CODES.usage;
+        return;
+      }
+      await withAdminRequest(
+        deps,
+        "POST",
+        "/plans/approve",
+        { serviceId: opts.service, projectionHash: opts.hash },
+        (body) => {
+          deps.stdout(JSON.stringify(body, null, 2));
+        },
+      );
+    });
+
+  plan
+    .command("revoke <projectionHash>")
+    .description("Revoke an approval; the plan parks again on the next reconcile")
+    .action(async (projectionHash: string) => {
+      await withAdminRequest(deps, "POST", "/plans/revoke", { projectionHash }, (body) => {
+        deps.stdout(JSON.stringify(body, null, 2));
+      });
+    });
+
   return program;
 }
 

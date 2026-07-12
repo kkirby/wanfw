@@ -5,6 +5,7 @@ import type { HeartbeatState } from "./heartbeat.js";
 import type { StateStore } from "./state-store/store.js";
 import { listStagedBundles } from "./trust/index.js";
 import { validateDraftDocument, type ComposedSchema } from "./composed-schema/index.js";
+import type { GateSnapshotHolder } from "./reconciler/index.js";
 
 /**
  * Status socket (§2.2): read-only, pure validation, and a nudge. Zero
@@ -28,6 +29,8 @@ export const STATUS_SOCKET_ROUTE_ALLOWLIST: ReadonlyArray<{ method: string; path
   { method: "POST", path: "/nudge" },
   { method: "GET", path: "/plugins" },
   { method: "GET", path: "/plugins/:id" },
+  { method: "GET", path: "/plans" },
+  { method: "GET", path: "/plans/:id" },
 ];
 
 export interface NudgeState {
@@ -45,7 +48,13 @@ export interface StatusSocketDeps {
 export function buildStatusSocketRouter(
   heartbeat: HeartbeatState,
   nudge: NudgeState,
-  extra?: { store: StateStore; stagingDir: string; statusDir?: string; onNudge?: () => void },
+  extra?: {
+    store: StateStore;
+    stagingDir: string;
+    statusDir?: string;
+    gateSnapshotHolder?: GateSnapshotHolder;
+    onNudge?: () => void;
+  },
 ): JsonUdsRouter {
   const router = new JsonUdsRouter();
 
@@ -71,10 +80,12 @@ export function buildStatusSocketRouter(
     }
   });
 
-  router.register("GET", "/approvals/pending", async () => ({
-    status: 200,
-    body: { pending: [] },
-  }));
+  router.register("GET", "/approvals/pending", async () => {
+    const services = extra?.gateSnapshotHolder?.services;
+    if (!services) return { status: 200, body: { pending: [] } };
+    const pending = [...services.values()].filter((s) => !s.approved);
+    return { status: 200, body: { pending } };
+  });
 
   router.register("POST", "/validate", async ({ body }) => {
     if (!extra?.statusDir) {
@@ -116,6 +127,22 @@ export function buildStatusSocketRouter(
     }
     const grants = extra.store.listGrants(params.id!);
     return { status: 200, body: { trusted, grants } };
+  });
+
+  router.register("GET", "/plans", async ({ req }) => {
+    const services = extra?.gateSnapshotHolder?.services;
+    if (!services) return { status: 200, body: { plans: [] } };
+    const url = new URL(req.url ?? "/", "http://unix");
+    const all = [...services.values()];
+    const plans = url.searchParams.get("pending") === "true" ? all.filter((s) => !s.approved) : all;
+    return { status: 200, body: { plans } };
+  });
+
+  router.register("GET", "/plans/:id", async ({ params }) => {
+    const services = extra?.gateSnapshotHolder?.services;
+    const plan = services?.get(params.id!);
+    if (!plan) return { status: 404, body: { error: "not_found", message: `no gated plan for service ${params.id}` } };
+    return { status: 200, body: plan };
   });
 
   return router;

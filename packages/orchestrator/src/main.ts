@@ -20,8 +20,10 @@ import {
   buildResolveStage,
   buildPlanStage,
   buildValidateStage,
+  buildGateStage,
   buildPlaceholderStage,
   buildRealPluginInvoker,
+  type GateSnapshotHolder,
 } from "./reconciler/index.js";
 
 const log = createLogger("orchestrator");
@@ -64,17 +66,19 @@ const pluginInvoker = buildRealPluginInvoker({
   bundlesDir: paths.bundlesDir,
 });
 
-// Reconcile engine (T3.4-T3.6): level-triggered, single-flight, coalescing.
-// load/resolve/plan/validate are real (T3.1/T3.3/T3.5/T3.6); GATE/EXECUTE/
-// OBSERVE are placeholders until T3.7-T3.9 land, so the full pipeline shape
-// is already real and observable end to end.
+const gateSnapshotHolder: GateSnapshotHolder = { services: new Map() };
+
+// Reconcile engine (T3.4-T3.7): level-triggered, single-flight, coalescing.
+// load/resolve/plan/validate/gate are real (T3.1/T3.3/T3.5/T3.6/T3.7);
+// EXECUTE/OBSERVE are placeholders until T3.8-T3.9 land, so the full
+// pipeline shape is already real and observable end to end.
 const reconcileEngine = new ReconcileEngine({
   stages: [
     buildLoadStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore }),
     buildResolveStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore }),
     buildPlanStage({ invokePlugin: pluginInvoker }),
     buildValidateStage({ store: stateStore }),
-    buildPlaceholderStage("gate"),
+    buildGateStage({ store: stateStore }, gateSnapshotHolder),
     buildPlaceholderStage("execute"),
     buildPlaceholderStage("observe"),
   ],
@@ -105,6 +109,7 @@ const statusServer: Server = listenOnUnixSocket(
     store: stateStore,
     stagingDir: paths.stagingDir,
     statusDir: paths.statusDir,
+    gateSnapshotHolder,
     onNudge: () => void reconcileEngine.trigger("nudge"),
   }),
   paths.statusSocketPath,
@@ -122,6 +127,8 @@ const adminServer: Server = listenOnUnixSocket(
     stagingDir: paths.stagingDir,
     bundlesDir: paths.bundlesDir,
     statusDir: paths.statusDir,
+    gateSnapshotHolder,
+    onApprovalChange: () => void reconcileEngine.trigger("plan-approve"),
   }),
   paths.adminSocketPath,
   0o600,

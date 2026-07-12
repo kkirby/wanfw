@@ -259,4 +259,81 @@ describe("wanfwctl-inner CLI", () => {
     expect(code).toBe(EXIT_CODES.ok);
     expect(JSON.parse(out.lines.join(""))).toEqual({ pluginId: "deploy-docker", untrusted: true });
   });
+
+  async function bootPlanRouter() {
+    const router = new JsonUdsRouter();
+    let approveCalls: unknown[] = [];
+    let revokeCalls: unknown[] = [];
+    router.register("GET", "/plans", async () => ({
+      status: 200,
+      body: { plans: [{ serviceId: "jellyfin", projectionHash: "abc123", approved: false }] },
+    }));
+    router.register("GET", "/plans/:id", async ({ params }) =>
+      params.id === "jellyfin"
+        ? { status: 200, body: { serviceId: "jellyfin", projectionHash: "abc123", approved: false, humanRendering: "image: x" } }
+        : { status: 404, body: { error: "not_found" } },
+    );
+    router.register("POST", "/plans/approve", async ({ body }) => {
+      approveCalls.push(body);
+      return { status: 200, body: { approved: true, serviceId: "jellyfin", projectionHash: "abc123" } };
+    });
+    router.register("POST", "/plans/revoke", async ({ body }) => {
+      revokeCalls.push(body);
+      return { status: 200, body: { revoked: true, projectionHash: (body as { projectionHash: string }).projectionHash } };
+    });
+    const dir = await mkdtemp(join(tmpdir(), "wanfw-cli-plan-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "admin.sock");
+    servers.push(listenOnUnixSocket(router, socketPath));
+    await new Promise((r) => setTimeout(r, 50));
+    return { socketPath, approveCalls: () => approveCalls, revokeCalls: () => revokeCalls };
+  }
+
+  it("plan list: prints gated plans", async () => {
+    const { socketPath } = await bootPlanRouter();
+    const out = captureOutput();
+    const code = await runCli(["plan", "list"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(JSON.parse(out.lines.join(""))).toEqual({ plans: [{ serviceId: "jellyfin", projectionHash: "abc123", approved: false }] });
+  });
+
+  it("plan show: prints one plan's detail", async () => {
+    const { socketPath } = await bootPlanRouter();
+    const out = captureOutput();
+    const code = await runCli(["plan", "show", "jellyfin"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(JSON.parse(out.lines.join("")).humanRendering).toBe("image: x");
+  });
+
+  it("plan approve: requires --service or --hash", async () => {
+    const { socketPath, approveCalls } = await bootPlanRouter();
+    const out = captureOutput();
+    const code = await runCli(["plan", "approve"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.usage);
+    expect(approveCalls()).toHaveLength(0);
+  });
+
+  it("plan approve --service calls the admin socket with serviceId", async () => {
+    const { socketPath, approveCalls } = await bootPlanRouter();
+    const out = captureOutput();
+    const code = await runCli(["plan", "approve", "--service", "jellyfin"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(approveCalls()).toEqual([{ serviceId: "jellyfin", projectionHash: undefined }]);
+  });
+
+  it("plan approve --hash calls the admin socket with projectionHash", async () => {
+    const { socketPath, approveCalls } = await bootPlanRouter();
+    const out = captureOutput();
+    const code = await runCli(["plan", "approve", "--hash", "abc123"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(approveCalls()).toEqual([{ serviceId: undefined, projectionHash: "abc123" }]);
+  });
+
+  it("plan revoke calls the admin socket with the projection hash", async () => {
+    const { socketPath, revokeCalls } = await bootPlanRouter();
+    const out = captureOutput();
+    const code = await runCli(["plan", "revoke", "abc123"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(revokeCalls()).toEqual([{ projectionHash: "abc123" }]);
+  });
 });
