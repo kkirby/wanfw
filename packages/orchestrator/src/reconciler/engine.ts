@@ -76,9 +76,16 @@ export class ReconcileEngine {
       }
     }
 
+    // A stage can flag a non-fatal degradation (T4.6: a served cert with
+    // fewer than ESCALATE_WITHIN_DAYS left) via ctx.degraded/ctx.degradedReason
+    // without failing the pipeline -- everything still reconciled
+    // successfully, it's just running on borrowed time.
+    const degraded = !lastError && ctx.degraded === true;
     const outcome: ReconcileOutcome = lastError
       ? { phase: "error", lastError, completedAt: new Date().toISOString() }
-      : { phase: "live", completedAt: new Date().toISOString() };
+      : degraded
+        ? { phase: "degraded", lastError: ctx.degradedReason as StageError, completedAt: new Date().toISOString() }
+        : { phase: "live", completedAt: new Date().toISOString() };
 
     this.onOutcome?.(outcome);
   }

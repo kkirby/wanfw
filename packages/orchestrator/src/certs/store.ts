@@ -44,6 +44,35 @@ function currentPointerPath(certsDir: string, name: string): string {
   return join(nameDir(certsDir, name), "current");
 }
 
+function renewalStatePath(certsDir: string, name: string): string {
+  return join(nameDir(certsDir, name), "renewal-state.json");
+}
+
+export interface RenewalState {
+  lastAttemptAt?: string;
+  lastSuccessAt?: string;
+  consecutiveFailures: number;
+}
+
+/** Renewal attempt/backoff bookkeeping (T4.6), sibling to the generation dirs -- survives orchestrator restarts, atomic write like the `current` pointer. Returns a fresh zero-state if this cert has never had a renewal attempt recorded. */
+export function readRenewalState(certsDir: string, name: string): RenewalState {
+  const path = renewalStatePath(certsDir, name);
+  if (!existsSync(path)) return { consecutiveFailures: 0 };
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as RenewalState;
+  } catch {
+    return { consecutiveFailures: 0 };
+  }
+}
+
+export function writeRenewalState(certsDir: string, name: string, state: RenewalState): void {
+  mkdirSync(nameDir(certsDir, name), { recursive: true, mode: 0o750 });
+  const path = renewalStatePath(certsDir, name);
+  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmp, JSON.stringify(state), { mode: 0o640 });
+  renameSync(tmp, path);
+}
+
 function readCurrentGeneration(certsDir: string, name: string): number | undefined {
   const path = currentPointerPath(certsDir, name);
   if (!existsSync(path)) return undefined;

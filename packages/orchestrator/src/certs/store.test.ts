@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { storeCert, currentCertPaths, rollbackCert, listCerts } from "./store.js";
+import { storeCert, currentCertPaths, rollbackCert, listCerts, readRenewalState, writeRenewalState } from "./store.js";
 
 describe("certs store (§6.6, §9, T4.5)", () => {
   const dirs: string[] = [];
@@ -112,5 +112,27 @@ describe("certs store (§6.6, §9, T4.5)", () => {
     storeCert(dir, "quarantine-service", "QUARANTINE-CERT", "QUARANTINE-KEY", {});
     expect(await readFile(currentCertPaths(dir, "wildcard")!.certPath, "utf8")).toBe("WILDCARD-CERT");
     expect(await readFile(currentCertPaths(dir, "quarantine-service")!.certPath, "utf8")).toBe("QUARANTINE-CERT");
+  });
+
+  it("readRenewalState returns a fresh zero-state for a name with no recorded attempts", () => {
+    const dir = freshDir();
+    expect(readRenewalState(dir, "wildcard")).toEqual({ consecutiveFailures: 0 });
+  });
+
+  it("writeRenewalState then readRenewalState round-trips exactly, even without a cert ever being stored", () => {
+    const dir = freshDir();
+    writeRenewalState(dir, "wildcard", { lastAttemptAt: "2026-07-12T00:00:00Z", lastSuccessAt: "2026-07-12T00:00:00Z", consecutiveFailures: 0 });
+    expect(readRenewalState(dir, "wildcard")).toEqual({
+      lastAttemptAt: "2026-07-12T00:00:00Z",
+      lastSuccessAt: "2026-07-12T00:00:00Z",
+      consecutiveFailures: 0,
+    });
+  });
+
+  it("writeRenewalState overwrites the previous state", () => {
+    const dir = freshDir();
+    writeRenewalState(dir, "wildcard", { consecutiveFailures: 1, lastAttemptAt: "2026-07-12T00:00:00Z" });
+    writeRenewalState(dir, "wildcard", { consecutiveFailures: 2, lastAttemptAt: "2026-07-12T01:00:00Z" });
+    expect(readRenewalState(dir, "wildcard")).toEqual({ consecutiveFailures: 2, lastAttemptAt: "2026-07-12T01:00:00Z" });
   });
 });

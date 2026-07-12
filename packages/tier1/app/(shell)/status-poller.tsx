@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Code } from "@mantine/core";
+import { Alert, Code, Stack } from "@mantine/core";
+
+interface FrameworkStatus {
+  phase?: string;
+  lastError?: { stage: string; plugin?: string; message: string };
+}
 
 export function StatusPoller({ initialStatus }: { initialStatus: unknown }) {
   const [status, setStatus] = useState(initialStatus);
@@ -21,5 +26,16 @@ export function StatusPoller({ initialStatus }: { initialStatus: unknown }) {
     return () => clearInterval(id);
   }, []);
 
-  return <Code block>{JSON.stringify(status, null, 2)}</Code>;
+  const framework = status as FrameworkStatus | null;
+
+  return (
+    <Stack>
+      {framework?.phase === "degraded" && (
+        <Alert color="orange" title="Framework degraded">
+          {framework.lastError?.message ?? "the framework reports a degraded state"}
+        </Alert>
+      )}
+      <Code block>{JSON.stringify(status, null, 2)}</Code>
+    </Stack>
+  );
 }

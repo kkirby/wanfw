@@ -23,12 +23,13 @@ import {
   buildGateStage,
   buildExecuteStage,
   buildObserveStage,
+  buildRenewalStage,
   buildRealPluginInvoker,
   type GateSnapshotHolder,
   type FrameworkRolesHolder,
 } from "./reconciler/index.js";
 import { buildRealDockerClient } from "./execute/index.js";
-import { currentCertPaths } from "./certs/store.js";
+import { currentCertPaths, listCerts, readRenewalState, writeRenewalState } from "./certs/store.js";
 
 const log = createLogger("orchestrator");
 const paths = resolvePaths();
@@ -82,6 +83,17 @@ const reconcileEngine = new ReconcileEngine({
     buildLoadStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore, rolesHolder }),
     buildResolveStage({ desiredDir: paths.desiredDir, bundlesDir: paths.bundlesDir, store: stateStore }),
     buildPlanStage({ invokePlugin: pluginInvoker, lookupCertPaths: (name) => currentCertPaths(paths.certsDir, name) }),
+    buildRenewalStage({
+      invokePlugin: pluginInvoker,
+      rolesHolder,
+      readRenewalState: (name) => readRenewalState(paths.certsDir, name),
+      writeRenewalState: (name, state) => writeRenewalState(paths.certsDir, name, state),
+      readCertMeta: (name) => {
+        const entry = listCerts(paths.certsDir).find((c) => c.name === name);
+        return entry?.meta ? { storedAt: entry.meta.storedAt, names: entry.meta.names } : undefined;
+      },
+      onCertChange: () => void reconcileEngine.trigger("cert-renewed"),
+    }),
     buildValidateStage({ store: stateStore }),
     buildGateStage({ store: stateStore }, gateSnapshotHolder),
     buildExecuteStage({ store: stateStore, docker: dockerClient, proxycfgDir: paths.proxycfgDir }),

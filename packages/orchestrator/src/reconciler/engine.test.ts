@@ -66,6 +66,45 @@ describe("ReconcileEngine", () => {
     expect(outcomes[0]?.lastError?.message).toBe("disk exploded");
   });
 
+  it("reports phase=degraded (with the reason) when every stage succeeds but a stage flags ctx.degraded (T4.6)", async () => {
+    const stages: NamedStage[] = [
+      {
+        name: "renewal",
+        run: async (ctx) => {
+          ctx.degraded = true;
+          ctx.degradedReason = { stage: "renewal", message: "cert 'wildcard' has fewer than 7 days remaining" };
+          return { ok: true };
+        },
+      },
+    ];
+    const outcomes: ReconcileOutcome[] = [];
+    const engine = new ReconcileEngine({ stages, log: createLogger("test"), onOutcome: (o) => outcomes.push(o) });
+
+    await engine.trigger("test");
+
+    expect(outcomes[0]?.phase).toBe("degraded");
+    expect(outcomes[0]?.lastError).toEqual({ stage: "renewal", message: "cert 'wildcard' has fewer than 7 days remaining" });
+  });
+
+  it("a stage failure still reports phase=error even if an earlier stage set ctx.degraded", async () => {
+    const stages: NamedStage[] = [
+      {
+        name: "renewal",
+        run: async (ctx) => {
+          ctx.degraded = true;
+          return { ok: true };
+        },
+      },
+      { name: "execute", run: async () => ({ ok: false, error: { stage: "execute", message: "docker unreachable" } }) },
+    ];
+    const outcomes: ReconcileOutcome[] = [];
+    const engine = new ReconcileEngine({ stages, log: createLogger("test"), onOutcome: (o) => outcomes.push(o) });
+
+    await engine.trigger("test");
+
+    expect(outcomes[0]?.phase).toBe("error");
+  });
+
   it("coalesces a burst of triggers arriving while a reconcile is in flight into exactly one extra run", async () => {
     const gate = deferred<void>();
     let entries = 0;
