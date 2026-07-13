@@ -10,11 +10,13 @@ const fixturesDir = join(__dirname, "__fixtures__");
 
 // V8 reserves a large virtual address range (CodeRange, heap arenas) at
 // startup regardless of actual heap usage -- on Linux, `prlimit --as` below
-// roughly 500MB crashes *any* Node child, including an entirely innocent
-// one, before it can do anything. 768MB is comfortably above that floor for
-// the "this plugin behaves" tests below; the rlimit-enforcement test
-// deliberately sets a limit *under* the floor to prove the limit is real.
-const SAFE_MEM_MB = 768;
+// that floor crashes *any* Node child (SharedHeapDeserializer OOM),
+// including an entirely innocent one, before it can do anything. The floor
+// varies by Node/V8 build: 768MB was enough locally but GitHub Actions'
+// ubuntu-latest Node 22 build needs more -- 1536MB is comfortably above
+// what's been observed there. The rlimit-enforcement test deliberately
+// sets a limit *under* the floor to prove the limit is real.
+const SAFE_MEM_MB = 1536;
 
 function baseJob(overrides: Partial<InvocationJob> = {}): InvocationJob {
   return {

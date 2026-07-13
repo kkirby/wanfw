@@ -122,7 +122,7 @@ describe("registerSupervisorMethods", () => {
       bundleDir: echoBundleDir,
       task: "echo",
       input: { hello: "world" },
-      limits: { wallMs: 3000, memMb: 768, cpuSeconds: 5 },
+      limits: { wallMs: 3000, memMb: 1536, cpuSeconds: 5 },
     })) as { ok: boolean; result: unknown };
 
     expect(result.ok).toBe(true);
