@@ -12,34 +12,54 @@ export interface CliDeps {
   prompt?: (question: string) => Promise<string>;
 }
 
-async function readAllStdinForCli(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk as Buffer);
-  }
-  return Buffer.concat(chunks).toString("utf8");
+// Feeds prompt() calls from stdin incrementally, not by reading to EOF
+// first. `docker exec -i` (the only way `wanfwctl` ever runs) never
+// provides a real TTY, and Node's readline has a well-documented gotcha
+// over piped input: 'line' events fire as soon as data arrives regardless
+// of whether a `.question()` call is actively awaiting one, so lines that
+// arrive before the next `.question()` call can be delivered to the wrong
+// call or dropped entirely. A single persistent 'data' listener that
+// splits on newlines and either resolves a pending question or queues the
+// line for the next one sidesteps that race without needing to buffer
+// the *entire* input first: an operator piping a small answers file gets
+// every line delivered in order the instant it's available, and an
+// operator typing answers live at a real terminal (no piped file at all)
+// gets each question printed immediately rather than the process
+// appearing to hang until they send EOF (Ctrl-D) -- the bug this eager-
+// read version had, since it printed nothing until the entire stream
+// closed.
+let stdinLineListenerAttached = false;
+let stdinLineBuffer = "";
+const queuedStdinLines: string[] = [];
+const pendingStdinLineResolvers: Array<(line: string) => void> = [];
+
+function ensureStdinLineListener(): void {
+  if (stdinLineListenerAttached) return;
+  stdinLineListenerAttached = true;
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk: string) => {
+    stdinLineBuffer += chunk;
+    let idx: number;
+    while ((idx = stdinLineBuffer.indexOf("\n")) !== -1) {
+      const line = stdinLineBuffer.slice(0, idx).replace(/\r$/, "");
+      stdinLineBuffer = stdinLineBuffer.slice(idx + 1);
+      const resolver = pendingStdinLineResolvers.shift();
+      if (resolver) resolver(line);
+      else queuedStdinLines.push(line);
+    }
+  });
 }
 
-// Reads the *entire* stdin up front and answers each prompt() call by
-// shifting one line off the result, rather than an interactive
-// line-by-line readline loop. `docker exec -i` (the only way `wanfwctl`
-// ever runs, deploy/wanfwctl) never provides a real TTY, and Node's
-// readline has a well-documented gotcha over piped input: 'line' events
-// fire as soon as data arrives regardless of whether a `.question()` call
-// is actively awaiting one, so lines that arrive between two `.question()`
-// calls (which is *every* line, since piped input all arrives in one
-// burst) can be delivered to the wrong call or dropped. Reading eagerly
-// and consuming a queue sidesteps that class of bug entirely -- this
-// process is a one-shot CLI invocation, not a REPL, so "no streaming"
-// costs nothing.
-let stdinLineQueue: string[] | undefined;
+function nextStdinLine(): Promise<string> {
+  ensureStdinLineListener();
+  const queued = queuedStdinLines.shift();
+  if (queued !== undefined) return Promise.resolve(queued);
+  return new Promise<string>((resolve) => pendingStdinLineResolvers.push(resolve));
+}
+
 async function defaultPrompt(question: string): Promise<string> {
-  if (stdinLineQueue === undefined) {
-    const raw = await readAllStdinForCli();
-    stdinLineQueue = raw.split("\n");
-  }
-  const line = (stdinLineQueue.shift() ?? "").replace(/\r$/, "");
   process.stdout.write(question);
+  const line = await nextStdinLine();
   process.stdout.write(`${line}\n`); // no TTY to echo it for us
   return line;
 }
