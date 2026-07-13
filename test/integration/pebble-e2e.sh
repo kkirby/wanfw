@@ -19,7 +19,7 @@ HOSTNAME="kavita.wanfw-pebble-e2e.test-domain.org"
 
 echo "==> Bringing up the compose stack + Pebble overlay"
 docker compose -f docker-compose.yml -f docker-compose.pebble.yml up -d --build
-sleep 5
+sleep 10
 
 echo "==> Trusting every built-in, including dns-mock (Pebble-only, T4.7) and cert-letsencrypt-dns01"
 ./wanfwctl plugin trust --builtin-all --yes >/dev/null
@@ -60,9 +60,16 @@ docker run --rm -v wanfw_wanfw_desired:/desired busybox sh -c "mkdir -p /desired
 EOF
 "
 
-echo "==> [1/5] Waiting for the RENEWAL stage to issue a real cert via Pebble (up to 60s)"
+echo "==> [1/5] Waiting for the RENEWAL stage to issue a real cert via Pebble (up to 3min)"
+# The ACME client's own poll cap is 10 minutes (cert-ensure.ts's
+# POLL_TIMEOUT_MS, §9) -- this outer budget only needs to be a fraction of
+# that, but 60s (30 x 2s) proved too tight on a cold/shared CI runner where
+# every image has to build from scratch with no layer cache carried over
+# from an earlier job, and containers take longer to become fully live
+# than on a warm local dev machine. 3 minutes gives real headroom without
+# masking a genuine failure -- the local happy path finishes in seconds.
 ISSUED=""
-for _ in $(seq 1 30); do
+for _ in $(seq 1 90); do
   CERTS_JSON=$(./wanfwctl cert list 2>/dev/null || echo '{"certs":[]}')
   if echo "$CERTS_JSON" | grep -q '"currentGeneration": 1'; then
     ISSUED="1"
@@ -73,7 +80,7 @@ done
 if [ -n "$ISSUED" ]; then
   pass "wildcard cert issued (generation 1) via a real ACME v2 DNS-01 flow against Pebble"
 else
-  fail "no cert was issued within 60s: $(./wanfwctl cert list 2>&1)"
+  fail "no cert was issued within 3min: $(./wanfwctl cert list 2>&1)"
 fi
 
 echo "==> [2/5] The stored cert is a real PEM issued by Pebble's intermediate CA"
@@ -113,7 +120,7 @@ docker run --rm -v wanfw_wanfw_certs:/certs busybox sh -c \
 echo "$FRAMEWORK_DOC" | ./wanfwctl framework set >/dev/null
 
 RENEWED=""
-for _ in $(seq 1 30); do
+for _ in $(seq 1 90); do
   CERTS_JSON=$(./wanfwctl cert list 2>/dev/null || echo '{"certs":[]}')
   if echo "$CERTS_JSON" | grep -q '"currentGeneration": 2'; then
     RENEWED="1"
@@ -124,13 +131,13 @@ done
 if [ -n "$RENEWED" ]; then
   pass "RENEWAL stage automatically re-issued a fresh cert (generation 2) once past the 30-day window"
 else
-  fail "no automatic renewal happened within 60s: $(./wanfwctl cert list 2>&1)"
+  fail "no automatic renewal happened within 3min: $(./wanfwctl cert list 2>&1)"
 fi
 
 echo "==> [5/5] The proxy's live Caddyfile references the latest generation's real cert path"
 docker rm -f wanfw-proxy >/dev/null 2>&1 || true
 echo "$FRAMEWORK_DOC" | ./wanfwctl framework set >/dev/null
-sleep 8
+sleep 20
 CADDYFILE=$(docker run --rm -v wanfw_wanfw_proxycfg:/proxycfg busybox cat /proxycfg/Caddyfile 2>/dev/null || echo "")
 if echo "$CADDYFILE" | grep -q "gen-2/fullchain.pem"; then
   pass "generated Caddyfile serves the gen-2 (renewed) cert, not gen-1 or tls internal"
