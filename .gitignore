@@ -5,3 +5,10 @@ dist/
 .DS_Store
 .turbo/
 coverage/
+
+# Fixture plugin bundles are checked in on purpose -- they're pre-built
+# "dist" output because pluginhost spawns them directly and they have no
+# build step of their own, but the blanket `dist/` rule above would
+# otherwise swallow them.
+!packages/*/src/__fixtures__/*/dist/
+!packages/*/src/__fixtures__/*/dist/**
