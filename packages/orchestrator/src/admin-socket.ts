@@ -261,8 +261,8 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
         params.id!,
         task,
         input ?? {},
-        // See wanfwctl's cli.ts for the memMb floor rationale (V8 startup cost).
-        limits ?? { wallMs: 30_000, memMb: 768, cpuSeconds: 30 },
+        // See wanfwctl's cli.ts for the memMb floor rationale (V8 startup cost, host-dependent).
+        limits ?? { wallMs: 30_000, memMb: 1536, cpuSeconds: 30 },
       );
       return { status: 200, body: result };
     } catch (err) {

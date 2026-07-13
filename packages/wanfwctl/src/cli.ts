@@ -262,10 +262,16 @@ export function buildProgram(deps: CliDeps): Command {
         "POST",
         `/plugins/${encodeURIComponent(id)}/invoke`,
         // memMb floor: V8 reserves a large CodeRange/heap arena at startup
-        // regardless of actual usage, so any limit much below ~700MB kills
+        // regardless of actual usage, so any limit much below this kills
         // even a completely idle Node process under Linux prlimit --as
-        // before it can do anything (discovered empirically in T2.6).
-        { task, input, limits: { wallMs: opts.wallMs, memMb: 768, cpuSeconds: 30 } },
+        // before it can do anything (discovered empirically in T2.6). The
+        // safe floor is host/kernel-dependent -- 768MB was enough on the
+        // dev machine T2.6 was built on, but GitHub Actions' ubuntu-latest
+        // runner needs more (same SharedHeapDeserializer OOM, discovered via
+        // "connection closed" invoke failures in `m1-plugin-runtime.sh`
+        // under CI, T6.6-era); 1536MB matches the floor pluginhost's own
+        // unit tests already raised to for the same reason.
+        { task, input, limits: { wallMs: opts.wallMs, memMb: 1536, cpuSeconds: 30 } },
         (body) => {
           deps.stdout(JSON.stringify(body, null, 2));
         },
