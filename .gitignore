@@ -12,3 +12,5 @@ coverage/
 # otherwise swallow them.
 !packages/*/src/__fixtures__/*/dist/
 !packages/*/src/__fixtures__/*/dist/**
+!test/integration/fixtures/*/dist/
+!test/integration/fixtures/*/dist/**
