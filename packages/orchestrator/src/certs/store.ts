@@ -30,6 +30,8 @@ export interface CertListEntry {
   currentGeneration: number;
   generations: number[];
   meta?: CertMeta;
+  /** Renewal attempt/backoff bookkeeping (T4.6) -- when it last ran, whether it's currently failing, and why. `readRenewalState`'s own zero-state default (`{consecutiveFailures: 0}`, no timestamps) when no attempt has ever been recorded. */
+  renewal: RenewalState;
 }
 
 function nameDir(certsDir: string, name: string): string {
@@ -172,7 +174,13 @@ export function listCerts(certsDir: string): CertListEntry[] {
     .map((name) => {
       const generations = listGenerations(certsDir, name);
       const currentGeneration = readCurrentGeneration(certsDir, name) ?? generations.at(-1) ?? 0;
-      return { name, currentGeneration, generations, meta: readMeta(certsDir, name, currentGeneration) };
+      return {
+        name,
+        currentGeneration,
+        generations,
+        meta: readMeta(certsDir, name, currentGeneration),
+        renewal: readRenewalState(certsDir, name),
+      };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 }
