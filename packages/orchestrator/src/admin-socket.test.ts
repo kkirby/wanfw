@@ -139,6 +139,46 @@ describe("admin socket: /framework (T5.3, docs/t5.3-decisions.md)", () => {
     expect((res.body as { error: string }).error).toBe("usage");
   });
 
+  it("POST /framework accepts a VLAN sub-interface (e.g. 'eth0.50') as a valid macvlan parent/lanInterface", async () => {
+    const { socketPath, store } = await boot();
+    const vlanFramework = {
+      ...validFramework,
+      spec: {
+        ...validFramework.spec,
+        roles: { networkProvider: "network-macvlan", proxyEngine: "proxy-caddy" },
+        network: {
+          lanInterface: "eth0.50",
+          macvlan: { parent: "eth0.50", reservedCidr: "192.168.1.240/29", gateway: "192.168.1.1" },
+        },
+      },
+    };
+    const res = await requestOverSocket(socketPath, "POST", "/framework", vlanFramework);
+    expect(res.status).toBe(200);
+    expect(store.getFrameworkDoc()).toEqual(vlanFramework);
+  });
+
+  it("POST /framework rejects a malformed reservedCidr/gateway/parent before ever storing it", async () => {
+    const { socketPath, store } = await boot();
+    const base = {
+      ...validFramework,
+      spec: {
+        ...validFramework.spec,
+        roles: { networkProvider: "network-macvlan", proxyEngine: "proxy-caddy" },
+      },
+    };
+
+    const badCidr = { ...base, spec: { ...base.spec, network: { lanInterface: "eth0", macvlan: { parent: "eth0", reservedCidr: "not-a-cidr", gateway: "192.168.1.1" } } } };
+    expect((await requestOverSocket(socketPath, "POST", "/framework", badCidr)).status).toBe(400);
+
+    const badGateway = { ...base, spec: { ...base.spec, network: { lanInterface: "eth0", macvlan: { parent: "eth0", reservedCidr: "192.168.1.240/29", gateway: "999.999.999.999" } } } };
+    expect((await requestOverSocket(socketPath, "POST", "/framework", badGateway)).status).toBe(400);
+
+    const badParent = { ...base, spec: { ...base.spec, network: { lanInterface: "eth0", macvlan: { parent: "not an interface!", reservedCidr: "192.168.1.240/29", gateway: "192.168.1.1" } } } };
+    expect((await requestOverSocket(socketPath, "POST", "/framework", badParent)).status).toBe(400);
+
+    expect(store.getFrameworkDoc()).toBeUndefined();
+  });
+
   it("a second POST /framework overwrites the first", async () => {
     const { socketPath, store } = await boot();
     await requestOverSocket(socketPath, "POST", "/framework", validFramework);

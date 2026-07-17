@@ -22,13 +22,29 @@
     "network": {
       "type": "object",
       "properties": {
-        "lanInterface": { "type": "string" },
+        "lanInterface": {
+          "type": "string",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*(\\.[0-9]{1,4})?$",
+          "description": "Host network interface name, e.g. 'eth0'. A VLAN-segmented LAN needs the tagged sub-interface instead, e.g. 'eth0.50' -- the bare parent NIC name will not see that VLAN's traffic."
+        },
         "macvlan": {
           "type": "object",
           "properties": {
-            "parent": { "type": "string" },
-            "reservedCidr": { "type": "string" },
-            "gateway": { "type": "string" }
+            "parent": {
+              "type": "string",
+              "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*(\\.[0-9]{1,4})?$",
+              "description": "Host interface macvlan attaches to, e.g. 'eth0' -- or 'eth0.50' if this LAN is VLAN-segmented (see lanInterface)."
+            },
+            "reservedCidr": {
+              "type": "string",
+              "pattern": "^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}/(3[0-2]|[12]?[0-9])$",
+              "description": "A CIDR slice reserved outside your DHCP pool, e.g. '192.168.1.240/29'."
+            },
+            "gateway": {
+              "type": "string",
+              "pattern": "^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$",
+              "description": "Your LAN's gateway IP, e.g. '192.168.1.1'."
+            }
           },
           "required": ["parent", "reservedCidr", "gateway"],
           "additionalProperties": false
