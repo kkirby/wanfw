@@ -4,21 +4,43 @@
   "type": "object",
   "properties": {
     "plugin": { "const": "deploy-docker" },
-    "image": { "type": "string", "minLength": 1 },
-    "cmd": { "type": "array", "items": { "type": "string" } },
-    "entrypoint": { "type": "array", "items": { "type": "string" } },
-    "env": { "type": "object", "additionalProperties": { "type": "string" } },
+    "image": {
+      "type": "string",
+      "minLength": 1,
+      "title": "Image",
+      "description": "Docker image to run, e.g. 'ghcr.io/kavitareader/kavita:latest'. Include a tag -- 'latest' is fine but pinning a version is safer for reproducible deploys."
+    },
+    "cmd": {
+      "type": "array",
+      "items": { "type": "string" },
+      "title": "Command",
+      "description": "Overrides the image's default CMD. Leave empty to use the image's own entrypoint/command unchanged."
+    },
+    "entrypoint": {
+      "type": "array",
+      "items": { "type": "string" },
+      "title": "Entrypoint",
+      "description": "Overrides the image's ENTRYPOINT. Rarely needed -- most images don't require this."
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "title": "Environment variables",
+      "description": "Plain (non-secret) environment variables passed to the container. For credentials/API keys, use the secrets store instead -- values here are visible in the desired-state files."
+    },
     "mounts": {
       "type": "array",
+      "title": "Mounts",
+      "description": "Named volumes or host bind mounts attached to the container.",
       "items": {
         "oneOf": [
           {
             "type": "object",
             "properties": {
               "type": { "const": "volume" },
-              "name": { "type": "string", "minLength": 1 },
-              "target": { "type": "string", "minLength": 1 },
-              "readOnly": { "type": "boolean" }
+              "name": { "type": "string", "minLength": 1, "title": "Volume name" },
+              "target": { "type": "string", "minLength": 1, "title": "Mount path in container", "description": "e.g. '/config'" },
+              "readOnly": { "type": "boolean", "title": "Read-only" }
             },
             "required": ["type", "name", "target"],
             "additionalProperties": false
@@ -27,9 +49,9 @@
             "type": "object",
             "properties": {
               "type": { "const": "bind" },
-              "source": { "type": "string", "minLength": 1 },
-              "target": { "type": "string", "minLength": 1 },
-              "readOnly": { "type": "boolean" }
+              "source": { "type": "string", "minLength": 1, "title": "Host path", "description": "Absolute path on the host, e.g. '/data/kavita/config'" },
+              "target": { "type": "string", "minLength": 1, "title": "Mount path in container", "description": "e.g. '/config'" },
+              "readOnly": { "type": "boolean", "title": "Read-only" }
             },
             "required": ["type", "source", "target"],
             "additionalProperties": false
@@ -37,21 +59,71 @@
         ]
       }
     },
-    "devices": { "type": "array", "items": { "type": "string" } },
-    "networkMode": { "type": "string" },
-    "ports": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 65535 } },
-    "capAdd": { "type": "array", "items": { "type": "string" } },
-    "privileged": { "type": "boolean" },
-    "securityOpt": { "type": "array", "items": { "type": "string" } },
-    "user": { "type": "string" },
-    "readOnly": { "type": "boolean" },
+    "devices": {
+      "type": "array",
+      "items": { "type": "string" },
+      "title": "Devices",
+      "description": "Host device paths to pass through, e.g. '/dev/dri' for hardware transcoding. Granting device access is a powerful action requiring approval."
+    },
+    "networkMode": {
+      "type": "string",
+      "title": "Network mode",
+      "description": "Docker network mode override. Leave unset for the normal per-service network; 'host' is a powerful action requiring approval."
+    },
+    "ports": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 1, "maximum": 65535 },
+      "title": "Container ports",
+      "description": "Ports the container listens on internally. This does not publish them on the host -- exposure to the WAN is configured via spec.expose, not here."
+    },
+    "capAdd": {
+      "type": "array",
+      "items": { "type": "string" },
+      "title": "Added Linux capabilities",
+      "description": "Extra Linux capabilities to grant the container (e.g. 'NET_ADMIN'). Broadening capabilities is a powerful action requiring approval."
+    },
+    "privileged": {
+      "type": "boolean",
+      "title": "Privileged",
+      "description": "Runs the container with full host privileges. Rarely needed and always a powerful action requiring approval."
+    },
+    "securityOpt": {
+      "type": "array",
+      "items": { "type": "string" },
+      "title": "Security options",
+      "description": "Docker --security-opt values, e.g. 'seccomp=unconfined'. Advanced/rarely needed."
+    },
+    "user": {
+      "type": "string",
+      "title": "Run as user",
+      "description": "UID (or 'uid:gid') to run the container process as, overriding the image's default."
+    },
+    "readOnly": {
+      "type": "boolean",
+      "title": "Read-only root filesystem",
+      "description": "Mounts the container's own root filesystem read-only. Combine with explicit volume mounts for any paths the app needs to write to."
+    },
     "resources": {
       "type": "object",
-      "properties": { "memory": { "type": "string" }, "cpus": { "type": "string" } },
+      "title": "Resource limits",
+      "description": "Memory and CPU limits for the container.",
+      "properties": {
+        "memory": { "type": "string", "title": "Memory limit", "description": "e.g. '512m' or '2g'" },
+        "cpus": { "type": "string", "title": "CPU limit", "description": "e.g. '1.5' for one and a half cores" }
+      },
       "additionalProperties": false
     },
-    "labels": { "type": "object", "additionalProperties": { "type": "string" } },
-    "restart": { "type": "string" }
+    "labels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "title": "Container labels",
+      "description": "Arbitrary Docker labels attached to the container, e.g. for external tooling that reads container metadata."
+    },
+    "restart": {
+      "type": "string",
+      "title": "Restart policy",
+      "description": "Docker restart policy, e.g. 'unless-stopped' or 'on-failure'. Leave unset for the platform default."
+    }
   },
   "required": ["plugin", "image"],
   "additionalProperties": false
