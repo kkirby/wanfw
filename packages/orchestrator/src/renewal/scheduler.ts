@@ -27,6 +27,8 @@ export interface RenewalState {
   lastAttemptAt?: string;
   lastSuccessAt?: string;
   consecutiveFailures: number;
+  /** The real error from the most recent failed renewal attempt, so an operator can see *why* it's retrying, not just that it is. Structurally mirrors certs/store.ts's own RenewalState (the two aren't unified into one shared type, so keep them in sync). */
+  lastError?: { code: string; message: string };
 }
 
 export const INITIAL_RENEWAL_STATE: RenewalState = { consecutiveFailures: 0 };

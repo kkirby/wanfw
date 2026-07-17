@@ -47,14 +47,20 @@ export function buildRenewalStage(deps: RenewalStageDeps): NamedStage {
       const certIssuerId = deps.rolesHolder.roles.certIssuer;
       const meta = deps.readCertMeta(WILDCARD_CERT_NAME);
       const namesMatch = meta !== undefined && [...meta.names].sort().join(",") === [...names].sort().join(",");
+      // Read before the escalation check below (not after, as this used to
+      // be ordered) so a real prior-failure reason is available to fold
+      // into degradedReason instead of only ever a generic message.
+      const state = deps.readRenewalState(WILDCARD_CERT_NAME);
 
       if (isEscalated(now(), meta?.storedAt, true)) {
         ctx.degraded = true;
         ctx.degradedReason = {
           stage: "renewal",
           message: meta
-            ? `cert '${WILDCARD_CERT_NAME}' has fewer than 7 days remaining and has not been renewed in time`
-            : `no cert has ever been issued for required names [${names.join(", ")}]`,
+            ? `cert '${WILDCARD_CERT_NAME}' has fewer than 7 days remaining and has not been renewed in time` +
+              (state.lastError ? `; last renewal attempt failed: ${state.lastError.message}` : "")
+            : `no cert has ever been issued for required names [${names.join(", ")}]` +
+              (state.lastError ? `; last attempt failed: ${state.lastError.message}` : ""),
         };
       }
 
@@ -67,7 +73,6 @@ export function buildRenewalStage(deps: RenewalStageDeps): NamedStage {
         return { ok: true };
       }
 
-      const state = deps.readRenewalState(WILDCARD_CERT_NAME);
       const decision = computeRenewalDecision({
         now: now(),
         certName: WILDCARD_CERT_NAME,
@@ -90,11 +95,14 @@ export function buildRenewalStage(deps: RenewalStageDeps): NamedStage {
           ...state,
           lastAttemptAt: attemptedAt,
           consecutiveFailures: state.consecutiveFailures + 1,
+          lastError: result.error,
         });
         // A failed renewal attempt is itself non-fatal to the reconcile --
         // the escalation check above already promoted this to `degraded`
-        // once it's within 7 days; before that, it's just a logged retry
-        // that'll be attempted again per the backoff schedule.
+        // once it's within 7 days (now with the real failure reason folded
+        // in, via the `state.lastError` read at the top of this stage);
+        // before that, it's just a retry that'll be attempted again per the
+        // backoff schedule.
       }
 
       return { ok: true };

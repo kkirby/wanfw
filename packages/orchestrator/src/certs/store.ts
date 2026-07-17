@@ -52,6 +52,8 @@ export interface RenewalState {
   lastAttemptAt?: string;
   lastSuccessAt?: string;
   consecutiveFailures: number;
+  /** The real error from the most recent failed renewal attempt (T4.6's RENEWAL stage), so an operator can see *why* it's retrying, not just that it is. */
+  lastError?: { code: string; message: string };
 }
 
 /** Renewal attempt/backoff bookkeeping (T4.6), sibling to the generation dirs -- survives orchestrator restarts, atomic write like the `current` pointer. Returns a fresh zero-state if this cert has never had a renewal attempt recorded. */
