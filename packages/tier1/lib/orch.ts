@@ -154,6 +154,33 @@ export async function listSecrets(): Promise<SecretListEntry[]> {
   return ((res.body as { secrets: SecretListEntry[] } | undefined)?.secrets) ?? [];
 }
 
+export interface CertMeta {
+  names: string[];
+  storedAt: string;
+  [key: string]: unknown;
+}
+
+export interface RenewalState {
+  lastAttemptAt?: string;
+  lastSuccessAt?: string;
+  consecutiveFailures: number;
+  lastError?: { code: string; message: string };
+}
+
+export interface CertListEntry {
+  name: string;
+  currentGeneration: number;
+  generations: number[];
+  meta?: CertMeta;
+  renewal: RenewalState;
+}
+
+/** Stored cert generations + renewal bookkeeping (§6.6, §9, T4.5/T4.6) -- rollback is CLI-only (ADR-6), same no-mutation-button pattern as approvals/secrets. */
+export async function listCerts(): Promise<CertListEntry[]> {
+  const res = await orchRequest("GET", "/certs");
+  return ((res.body as { certs: CertListEntry[] } | undefined)?.certs) ?? [];
+}
+
 export interface OperatorInfo {
   domain: string;
   wanIp: string | null;
