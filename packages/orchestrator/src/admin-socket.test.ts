@@ -369,4 +369,55 @@ describe("admin socket: /plugins/trust-builtins ids filter (T5.3)", () => {
     expect(checks.find((c) => c.name === "wan-ip-detect")?.status).toBe("pass");
     expect(checks.find((c) => c.name === "framework-doc")?.status).toBe("pass");
   });
+
+  it("POST /network/probe-macvlan forwards to the injected probeNetwork and returns its real result -- the wizard's pre-flight check (T5.3)", async () => {
+    const heartbeat: HeartbeatState = { current: { phase: "pending-init", ts: "x", version: "0.1.0" } };
+    const dbDir = await mkdtemp(join(tmpdir(), "wanfw-admin-probe-"));
+    dirs.push(dbDir);
+    const store = new StateStore(join(dbDir, "state.sqlite3"));
+    stores.push(store);
+    const keyDir = await mkdtemp(join(tmpdir(), "wanfw-admin-probe-key-"));
+    dirs.push(keyDir);
+    const signingKeyHolder = { manager: await SigningKeyManager.loadOrCreate(join(keyDir, "signing.key")), keyPath: join(keyDir, "signing.key") };
+    const auditDir = await mkdtemp(join(tmpdir(), "wanfw-admin-probe-audit-"));
+    dirs.push(auditDir);
+    const auditLog = new AuditLog(join(auditDir, "audit.jsonl"), () => signingKeyHolder.manager);
+    const stagingDir = await mkdtemp(join(tmpdir(), "wanfw-admin-probe-staging-"));
+    dirs.push(stagingDir);
+    const socketDir = await mkdtemp(join(tmpdir(), "wanfw-admin-probe-sock-"));
+    dirs.push(socketDir);
+
+    let calledWith: string | undefined;
+    const router = buildAdminSocketRouter({
+      heartbeat,
+      signingKeyHolder,
+      store,
+      auditLog,
+      pluginConnectionHolder: {},
+      stagingDir,
+      bundlesDir: stagingDir,
+      statusDir: stagingDir,
+      secretsDir: stagingDir,
+      certsDir: stagingDir,
+      gateSnapshotHolder: { services: new Map() },
+      probeNetwork: async (mode, parent) => {
+        calledWith = parent;
+        return mode === "macvlan" && parent === "eth0.50" ? { ok: true } : { ok: false, reason: "no promiscuous mode" };
+      },
+    });
+    const socketPath = join(socketDir, "admin.sock");
+    servers.push(listenOnUnixSocket(router, socketPath, 0o600));
+    await new Promise((r) => setTimeout(r, 50));
+
+    const passRes = await requestOverSocket(socketPath, "POST", "/network/probe-macvlan", { parent: "eth0.50" });
+    expect(passRes.status).toBe(200);
+    expect(passRes.body).toEqual({ ok: true });
+    expect(calledWith).toBe("eth0.50");
+
+    const failRes = await requestOverSocket(socketPath, "POST", "/network/probe-macvlan", { parent: "eth0" });
+    expect(failRes.body).toEqual({ ok: false, reason: "no promiscuous mode" });
+
+    const usageRes = await requestOverSocket(socketPath, "POST", "/network/probe-macvlan", {});
+    expect(usageRes.status).toBe(400);
+  });
 });

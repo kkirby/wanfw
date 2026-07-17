@@ -47,6 +47,23 @@ async function requireAnswer(deps: InitDeps, question: string): Promise<string> 
   }
 }
 
+// Mirrors the pattern constraints in
+// packages/core-schemas/src/schemas/framework.schema.json's network fields
+// (item 15) -- catching a malformed answer here, with a specific message,
+// beats letting it reach POST /framework's Ajv validation as generic noise.
+const INTERFACE_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+const VLAN_ID_PATTERN = /^[0-9]{1,4}$/;
+const CIDR_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}\/(3[0-2]|[12]?[0-9])$/;
+const IPV4_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
+
+async function requireMatchingAnswer(deps: InitDeps, question: string, pattern: RegExp, hint: string): Promise<string> {
+  for (;;) {
+    const answer = await requireAnswer(deps, question);
+    if (pattern.test(answer)) return answer;
+    deps.stdout(`  invalid format -- ${hint}`);
+  }
+}
+
 /**
  * `wanfwctl init` (T5.3, §11, §1.2 steps 1-2): collects domain/DNS
  * credentials/ACME email, probes both network providers and lets the
@@ -114,16 +131,43 @@ export async function runInit(deps: InitDeps): Promise<number> {
     const vlanSegmented = await askYesNo(deps, "  Is your LAN VLAN-segmented?", false);
     let parent: string;
     if (vlanSegmented) {
-      const baseInterface = await requireAnswer(deps, "    Base interface (e.g. eth0 -- check with `ip route` on the host)");
-      const vlanId = await requireAnswer(deps, "    VLAN ID (e.g. 50)");
+      const baseInterface = await requireMatchingAnswer(
+        deps,
+        "    Base interface (e.g. eth0 -- check with `ip route` on the host)",
+        INTERFACE_NAME_PATTERN,
+        "an interface name looks like 'eth0' or 'enp3s0' (letters/digits/hyphens, starting with a letter)",
+      );
+      const vlanId = await requireMatchingAnswer(deps, "    VLAN ID (e.g. 50)", VLAN_ID_PATTERN, "a VLAN ID is 1-4 digits, e.g. 50");
       parent = `${baseInterface}.${vlanId}`;
       deps.stdout(`    using '${parent}' as the macvlan parent interface`);
     } else {
-      parent = await requireAnswer(deps, "  Host LAN interface (e.g. eth0 -- check with `ip route` on the host)");
+      parent = await requireMatchingAnswer(
+        deps,
+        "  Host LAN interface (e.g. eth0 -- check with `ip route` on the host)",
+        INTERFACE_NAME_PATTERN,
+        "an interface name looks like 'eth0' or 'enp3s0' (letters/digits/hyphens, starting with a letter)",
+      );
     }
-    const reservedCidr = await requireAnswer(deps, "  Reserved CIDR slice outside your DHCP pool (e.g. 192.168.1.240/29)");
-    const gateway = await requireAnswer(deps, "  LAN gateway IP (e.g. 192.168.1.1)");
+    const reservedCidr = await requireMatchingAnswer(
+      deps,
+      "  Reserved CIDR slice outside your DHCP pool (e.g. 192.168.1.240/29)",
+      CIDR_PATTERN,
+      "a CIDR looks like '192.168.1.240/29'",
+    );
+    const gateway = await requireMatchingAnswer(deps, "  LAN gateway IP (e.g. 192.168.1.1)", IPV4_PATTERN, "an IPv4 address looks like '192.168.1.1'");
     network = { lanInterface: parent, macvlan: { parent, reservedCidr, gateway } };
+
+    deps.stdout(`\nProbing macvlan feasibility on '${parent}'...`);
+    const probeRes = await adminRequest(deps.adminSocketPath, "POST", "/network/probe-macvlan", { parent });
+    const probe = probeRes.body as { ok?: boolean; reason?: string };
+    if (!probe.ok) {
+      deps.stderr(
+        `error: macvlan is not usable on '${parent}'${probe.reason ? `: ${probe.reason}` : ""} -- ` +
+          "re-run `wanfwctl init` and double-check the interface name/VLAN ID before retrying.",
+      );
+      return 1;
+    }
+    deps.stdout("  macvlan probe passed.");
   }
 
   deps.stdout("\nTrusting production builtins...");
