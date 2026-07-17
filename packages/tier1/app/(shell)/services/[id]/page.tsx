@@ -1,16 +1,17 @@
-import { Alert, Group, Stack, Title } from "@mantine/core";
-import { getComposedSchema } from "../../../../lib/orch";
+import { Alert, Badge, Card, Group, Stack, Text, Title } from "@mantine/core";
+import { getComposedSchema, getServiceStatus } from "../../../../lib/orch";
 import { readServiceDoc } from "../../../../lib/desired-write";
 import { buildFieldTree } from "../../../../lib/schema-form/build-field-tree";
 import type { JsonSchemaLike } from "../../../../lib/schema-form/types";
 import { ServiceFormClient } from "../service-form-client";
 import { DeleteServiceButton } from "./delete-button";
+import { PHASE_COLOR, StageErrorAlert } from "../../../../components/error-alert/ErrorAlert";
 
 export const dynamic = "force-dynamic";
 
 export default async function EditServicePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [composed, doc] = await Promise.all([getComposedSchema(), readServiceDoc(id)]);
+  const [composed, doc, status] = await Promise.all([getComposedSchema(), readServiceDoc(id), getServiceStatus(id)]);
 
   if (!doc) {
     return (
@@ -43,6 +44,24 @@ export default async function EditServicePage({ params }: { params: Promise<{ id
         <Title order={2}>Edit service: {doc.metadata.displayName ?? id}</Title>
         <DeleteServiceButton id={id} />
       </Group>
+      {status && (
+        <Card withBorder padding="lg">
+          <Group gap="xs" mb={status.lastError ? "sm" : 0}>
+            <Badge color={PHASE_COLOR[status.phase] ?? "gray"}>{status.phase}</Badge>
+            {status.endpoints.map((endpoint) => (
+              <Text key={endpoint} size="sm" c="dimmed">
+                {endpoint}
+              </Text>
+            ))}
+            {status.certNotAfter && (
+              <Text size="sm" c="dimmed">
+                cert expires {new Date(status.certNotAfter).toLocaleDateString()}
+              </Text>
+            )}
+          </Group>
+          {status.lastError && <StageErrorAlert error={status.lastError} color={status.phase === "error" ? "red" : "orange"} />}
+        </Card>
+      )}
       <ServiceFormClient
         serviceId={id}
         fields={fields}
