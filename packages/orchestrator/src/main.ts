@@ -126,7 +126,15 @@ const reconcileEngine = new ReconcileEngine({
       certsVolumeName: paths.certsVolumeName,
       proxycfgVolumeName: paths.proxycfgVolumeName,
     }),
-    buildObserveStage({ store: stateStore, docker: dockerClient, statusDir: paths.statusDir }),
+    buildObserveStage({
+      store: stateStore,
+      docker: dockerClient,
+      statusDir: paths.statusDir,
+      readCertMeta: (name) => {
+        const entry = listCerts(paths.certsDir).find((c) => c.name === name);
+        return entry?.meta ? { storedAt: entry.meta.storedAt, names: entry.meta.names } : undefined;
+      },
+    }),
   ],
   log,
   onOutcome: (outcome) => {
