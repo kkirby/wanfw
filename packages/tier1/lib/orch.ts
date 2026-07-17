@@ -221,6 +221,20 @@ export async function listAuditEntries(): Promise<AuditEntry[]> {
   return ((res.body as { entries: AuditEntry[] } | undefined)?.entries) ?? [];
 }
 
+export type DoctorStatus = "pass" | "fail" | "warn" | "info" | "skip";
+
+export interface DoctorCheck {
+  name: string;
+  status: DoctorStatus;
+  message: string;
+}
+
+/** Read-only mirror of the admin socket's own /doctor (T5.4) -- same checks `wanfwctl doctor` runs (Docker socket, proxy container, macvlan probe, WAN IP/DNS match, DNS provider credentials), pure reads/probes with no mutation, so a web operator gets these without needing shell access. */
+export async function runDoctorChecks(): Promise<DoctorCheck[]> {
+  const res = await orchRequest("GET", "/doctor");
+  return ((res.body as { checks: DoctorCheck[] } | undefined)?.checks) ?? [];
+}
+
 export interface OperatorInfo {
   domain: string;
   wanIp: string | null;

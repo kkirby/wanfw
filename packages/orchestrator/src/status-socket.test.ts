@@ -304,6 +304,30 @@ describe("status socket handlers (live HTTP over a real Unix socket)", () => {
     expect(entries[0]!.type).toBe("plugin.trust");
   });
 
+  it("GET /doctor returns an empty checklist when the router has no store wired in", async () => {
+    const heartbeat: HeartbeatState = { current: { phase: "pending-init", ts: "x", version: "0.1.0" } };
+    const nudge: NudgeState = { nudgedAt: null, count: 0 };
+    const router = buildStatusSocketRouter(heartbeat, nudge, undefined);
+    const socketDir = await mkdtemp(join(tmpdir(), "wanfw-status-doctor-socket-"));
+    dirs.push(socketDir);
+    const socketPath = join(socketDir, "orch-status.sock");
+    servers.push(listenOnUnixSocket(router, socketPath));
+    await new Promise((r) => setTimeout(r, 50));
+
+    const res = await requestOverSocket(socketPath, "GET", "/doctor");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ checks: [] });
+  });
+
+  it("GET /doctor mirrors the admin socket's own doctor checks (T5.4)", async () => {
+    const { socketPath } = await boot();
+    const res = await requestOverSocket(socketPath, "GET", "/doctor");
+    expect(res.status).toBe(200);
+    const checks = (res.body as { checks: Array<{ name: string; status: string }> }).checks;
+    expect(checks.some((c) => c.name === "docker-socket")).toBe(true);
+    expect(checks.some((c) => c.name === "framework-doc")).toBe(true);
+  });
+
   it("GET /operator-info mirrors the admin socket's operator info, null before anything is set (T5.5)", async () => {
     const { socketPath, store } = await boot();
     const before = await requestOverSocket(socketPath, "GET", "/operator-info");
