@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { href: "/plugins", label: "Plugins" },
   { href: "/approvals", label: "Approvals" },
   { href: "/secrets", label: "Secrets" },
+  { href: "/audit", label: "Audit log" },
   { href: "/instructions", label: "Setup instructions" },
 ];
 

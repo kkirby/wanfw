@@ -267,6 +267,43 @@ describe("status socket handlers (live HTTP over a real Unix socket)", () => {
     expect(after.body).toEqual({ framework: doc });
   });
 
+  it("GET /audit returns an empty list when no AuditLog is wired in", async () => {
+    const { socketPath } = await boot();
+    const res = await requestOverSocket(socketPath, "GET", "/audit");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ entries: [] });
+  });
+
+  it("GET /audit mirrors the admin socket's own audit log read-only (entries only, no /audit/verify here)", async () => {
+    const { AuditLog } = await import("./audit-log.js");
+    const { SigningKeyManager } = await import("./signing-key.js");
+    const dbDir = await mkdtemp(join(tmpdir(), "wanfw-status-audit-"));
+    dirs.push(dbDir);
+    const signingKey = await SigningKeyManager.loadOrCreate(join(dbDir, "signing.key"));
+    const auditLog = new AuditLog(join(dbDir, "audit.jsonl"), () => signingKey);
+    auditLog.append({ type: "plugin.trust", details: { pluginId: "deploy-docker", version: "0.1.0" } });
+
+    const heartbeat: HeartbeatState = { current: { phase: "pending-init", ts: "x", version: "0.1.0" } };
+    const nudge: NudgeState = { nudgedAt: null, count: 0 };
+    const router = buildStatusSocketRouter(heartbeat, nudge, {
+      store: new StateStore(join(dbDir, "state.sqlite3")),
+      stagingDir: dbDir,
+      auditLog,
+    });
+    const socketDir = await mkdtemp(join(tmpdir(), "wanfw-status-audit-socket-"));
+    dirs.push(socketDir);
+    const socketPath = join(socketDir, "orch-status.sock");
+    const server = listenOnUnixSocket(router, socketPath);
+    servers.push(server);
+    await new Promise((r) => setTimeout(r, 50));
+
+    const res = await requestOverSocket(socketPath, "GET", "/audit");
+    expect(res.status).toBe(200);
+    const entries = (res.body as { entries: Array<{ type: string }> }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.type).toBe("plugin.trust");
+  });
+
   it("GET /operator-info mirrors the admin socket's operator info, null before anything is set (T5.5)", async () => {
     const { socketPath, store } = await boot();
     const before = await requestOverSocket(socketPath, "GET", "/operator-info");

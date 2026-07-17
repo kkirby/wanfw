@@ -8,6 +8,7 @@ import { validateDraftDocument, type ComposedSchema } from "./composed-schema/in
 import type { GateSnapshotHolder } from "./reconciler/index.js";
 import { listSecrets } from "./secrets/store.js";
 import { listCerts } from "./certs/store.js";
+import type { AuditLog } from "./audit-log.js";
 
 /**
  * Status socket (§2.2): read-only, pure validation, and a nudge. Zero
@@ -38,6 +39,7 @@ export const STATUS_SOCKET_ROUTE_ALLOWLIST: ReadonlyArray<{ method: string; path
   { method: "GET", path: "/certs" },
   { method: "GET", path: "/framework" },
   { method: "GET", path: "/operator-info" },
+  { method: "GET", path: "/audit" },
 ];
 
 export interface NudgeState {
@@ -62,6 +64,7 @@ export function buildStatusSocketRouter(
     secretsDir?: string;
     certsDir?: string;
     gateSnapshotHolder?: GateSnapshotHolder;
+    auditLog?: AuditLog;
     onNudge?: () => void;
   },
 ): JsonUdsRouter {
@@ -205,6 +208,19 @@ export function buildStatusSocketRouter(
   router.register("GET", "/operator-info", async () => {
     if (!extra) return { status: 200, body: { operatorInfo: null } };
     return { status: 200, body: { operatorInfo: extra.store.getOperatorInfo() ?? null } };
+  });
+
+  // Read-only mirror of the admin socket's own /audit (entries only --
+  // deliberately no /audit/verify mirror here: chain verification stays
+  // admin.sock-only). A compromised tier1 already sees desired-state,
+  // service statuses, trust records, and cert/secret metadata through this
+  // same socket; this adds operational history (who trusted what, when a
+  // cert rolled back, invocation outcomes) to that same read-only surface
+  // -- never a secret value, never a mutation path, same as every other
+  // route in this file.
+  router.register("GET", "/audit", async () => {
+    if (!extra?.auditLog) return { status: 200, body: { entries: [] } };
+    return { status: 200, body: { entries: extra.auditLog.readAll() } };
   });
 
   return router;

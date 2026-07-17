@@ -205,6 +205,22 @@ export async function getFramework(): Promise<FrameworkDoc | undefined> {
   return framework ?? undefined;
 }
 
+export interface AuditEntry {
+  seq: number;
+  ts: string;
+  type: string;
+  details: Record<string, unknown>;
+  prevHash: string;
+  hash: string;
+  checkpointSig?: string;
+}
+
+/** Read-only mirror of the admin socket's own /audit (entries only -- chain verification stays admin.sock/wanfwctl-only). Never carries secret values, same as every other read this module exposes. */
+export async function listAuditEntries(): Promise<AuditEntry[]> {
+  const res = await orchRequest("GET", "/audit");
+  return ((res.body as { entries: AuditEntry[] } | undefined)?.entries) ?? [];
+}
+
 export interface OperatorInfo {
   domain: string;
   wanIp: string | null;

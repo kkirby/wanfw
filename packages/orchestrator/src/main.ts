@@ -166,6 +166,7 @@ const statusServer: Server = listenOnUnixSocket(
     secretsDir: paths.secretsDir,
     certsDir: paths.certsDir,
     gateSnapshotHolder,
+    auditLog,
     onNudge: () => void reconcileEngine.trigger("nudge"),
   }),
   paths.statusSocketPath,
