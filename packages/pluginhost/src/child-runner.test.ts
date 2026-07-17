@@ -82,6 +82,50 @@ describe("runInvocation: timeout kill", () => {
   }, 5000);
 });
 
+describe("runInvocation: stderr tail on a crashing child", () => {
+  it("folds the child's stderr output into the nonzero_exit error message", async () => {
+    const bundleDir = join(fixturesDir, "crash-plugin");
+    const bundleHash = await realHash(bundleDir);
+    const job = baseJob({ bundleDir, bundleHash, task: "anything" });
+
+    const result = await runInvocation(job, { hostApiHandler: noopHostApi });
+
+    expect(result.ok).toBe(false);
+    // Which failure mode wins is a race (the connection rejecting on the
+    // closed pipe vs. the child's own "exit" event) -- same nondeterminism
+    // already documented/asserted-around in the rlimit-enforcement test
+    // below. Either way the stderr tail must be present.
+    expect(["nonzero_exit", "invoke_error"]).toContain(result.error?.code);
+    expect(result.error?.message).toContain("simulated plugin crash for stderr-tail test");
+  });
+
+  it("truncates an oversized stderr tail rather than growing the message unboundedly", async () => {
+    const bundleDir = join(fixturesDir, "crash-plugin");
+    const bundleHash = await realHash(bundleDir);
+    const job = baseJob({ bundleDir, bundleHash, task: "anything" });
+    // A fake spawn whose child writes far more than the 4KB tail cap before exiting.
+    const { EventEmitter } = await import("node:events");
+    const { PassThrough } = await import("node:stream");
+    const spawnFn = vi.fn(() => {
+      const child: any = new EventEmitter();
+      child.stdin = new PassThrough();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = vi.fn();
+      setImmediate(() => {
+        child.stderr.write("x".repeat(10_000));
+        child.emit("exit", 1);
+      });
+      return child;
+    });
+
+    const result = await runInvocation(job, { hostApiHandler: noopHostApi, spawnFn: spawnFn as any });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.message.length).toBeLessThan(10_000);
+  });
+});
+
 describe("childEnv: non-secret endpoint-override passthrough (T4.7)", () => {
   const ALLOWED = ["WANFW_ACME_DIRECTORY_URL", "WANFW_DNS01_RESOLVER", "WANFW_CHALLTESTSRV_URL", "NODE_TLS_REJECT_UNAUTHORIZED"] as const;
 

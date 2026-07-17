@@ -137,17 +137,30 @@ export async function runInvocation(job: InvocationJob, deps: ChildRunnerDeps): 
     stdio: ["pipe", "pipe", "pipe"],
   });
 
-  // Nothing else reads child.stderr; an uncaught exception/rejection in a
-  // plugin's entrypoint (a real thing that happens -- e.g. T4.2's
-  // dns-namecheap plugin hit one live) would otherwise vanish entirely,
-  // leaving only "connection closed" upstream with zero clue why. Prefixed
-  // so it's greppable in the pluginhost container's own log stream.
+  // An uncaught exception/rejection in a plugin's entrypoint (a real thing
+  // that happens -- e.g. T4.2's dns-namecheap plugin hit one live) would
+  // otherwise vanish entirely, leaving only "connection closed" upstream
+  // with zero clue why. Still written to this process's own stderr
+  // (prefixed so it's greppable in the pluginhost container's own log
+  // stream) *and* captured into `stderrTail` so it can ride along in the
+  // InvocationResult's own error message -- the RPC caller (the
+  // orchestrator, a different container) has no other way to see this text
+  // at all, since nothing else ever reads child.stderr.
+  let stderrTail = "";
+  const STDERR_TAIL_MAX = 4096;
   child.stderr.on("data", (chunk: Buffer) => {
     process.stderr.write(`[plugin:${job.pluginId} stderr] ${chunk.toString()}`);
+    stderrTail = (stderrTail + chunk.toString()).slice(-STDERR_TAIL_MAX);
   });
 
   const connection = new JsonRpcConnection(child.stdout, child.stdin);
   connection.registerMethod("host.call", async (params) => deps.hostApiHandler(params));
+
+  // Folds whatever stderr the child produced onto a resolution's own message
+  // -- the tail is often the actual thrown exception/stack trace, which
+  // otherwise never reaches the RPC caller at all (see the stderr listener
+  // above for why this matters).
+  const withStderrTail = (message: string): string => (stderrTail ? `${message}: ${stderrTail.trim()}` : message);
 
   return new Promise<InvocationResult>((resolve) => {
     let settled = false;
@@ -158,7 +171,7 @@ export async function runInvocation(job: InvocationJob, deps: ChildRunnerDeps): 
       resolve({
         invocationId: job.invocationId,
         ok: false,
-        error: { code: "timeout", message: `invocation exceeded wallMs=${job.limits.wallMs}` },
+        error: { code: "timeout", message: withStderrTail(`invocation exceeded wallMs=${job.limits.wallMs}`) },
       });
     }, job.limits.wallMs);
 
@@ -176,7 +189,7 @@ export async function runInvocation(job: InvocationJob, deps: ChildRunnerDeps): 
         settled = true;
         clearTimeout(timeout);
         child.kill();
-        resolve({ invocationId: job.invocationId, ok: false, error: { code: "invoke_error", message: err.message } });
+        resolve({ invocationId: job.invocationId, ok: false, error: { code: "invoke_error", message: withStderrTail(err.message) } });
       });
 
     child.on("exit", (code) => {
@@ -186,7 +199,7 @@ export async function runInvocation(job: InvocationJob, deps: ChildRunnerDeps): 
       resolve({
         invocationId: job.invocationId,
         ok: false,
-        error: { code: "nonzero_exit", message: `child exited with code ${code}` },
+        error: { code: "nonzero_exit", message: withStderrTail(`child exited with code ${code}`) },
       });
     });
 
