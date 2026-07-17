@@ -101,12 +101,26 @@ export async function runInit(deps: InitDeps): Promise<number> {
   const apiKey = await requireAnswer(deps, "  Namecheap API key");
 
   deps.stdout("\nNetwork provider: bridge (default, publishes 443/80 on the host) or macvlan (dedicated LAN IP).");
+  deps.stdout("  See docs/operator-guide.md §5 for the full macvlan networking explanation.");
   const useMacvlan = await askYesNo(deps, "Use macvlan?", false);
   let networkProvider = "network-bridge";
   let network: Record<string, unknown> = { lanInterface: "eth0" };
   if (useMacvlan) {
     networkProvider = "network-macvlan";
-    const parent = await requireAnswer(deps, "  Host LAN interface (e.g. eth0 -- check with `ip route` on the host)");
+    deps.stdout(
+      "  If your switch tags a VLAN for this host's LAN, the container needs the VLAN sub-interface" +
+        " (e.g. base 'eth0', VLAN 50 -> 'eth0.50'), not the parent physical interface.",
+    );
+    const vlanSegmented = await askYesNo(deps, "  Is your LAN VLAN-segmented?", false);
+    let parent: string;
+    if (vlanSegmented) {
+      const baseInterface = await requireAnswer(deps, "    Base interface (e.g. eth0 -- check with `ip route` on the host)");
+      const vlanId = await requireAnswer(deps, "    VLAN ID (e.g. 50)");
+      parent = `${baseInterface}.${vlanId}`;
+      deps.stdout(`    using '${parent}' as the macvlan parent interface`);
+    } else {
+      parent = await requireAnswer(deps, "  Host LAN interface (e.g. eth0 -- check with `ip route` on the host)");
+    }
     const reservedCidr = await requireAnswer(deps, "  Reserved CIDR slice outside your DHCP pool (e.g. 192.168.1.240/29)");
     const gateway = await requireAnswer(deps, "  LAN gateway IP (e.g. 192.168.1.1)");
     network = { lanInterface: parent, macvlan: { parent, reservedCidr, gateway } };
