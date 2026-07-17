@@ -181,6 +181,30 @@ export async function listCerts(): Promise<CertListEntry[]> {
   return ((res.body as { certs: CertListEntry[] } | undefined)?.certs) ?? [];
 }
 
+export interface FrameworkDoc {
+  domain: string;
+  deploymentMode: "subdomain" | "port";
+  acmeEmail: string;
+  roles: {
+    networkProvider: string;
+    proxyEngine: string;
+    certIssuer?: string;
+    dnsProvider?: string;
+  };
+  strictApprovals?: "powerful" | "all";
+  network?: {
+    lanInterface: string;
+    macvlan?: { parent: string; reservedCidr: string; gateway: string };
+  };
+}
+
+/** Read-only mirror of the framework document `wanfwctl init`/the setup wizard writes (§5.3) -- tier1 has no path to admin.sock and must never be able to author it, only display it. */
+export async function getFramework(): Promise<FrameworkDoc | undefined> {
+  const res = await orchRequest("GET", "/framework");
+  const framework = (res.body as { framework: FrameworkDoc | null } | undefined)?.framework;
+  return framework ?? undefined;
+}
+
 export interface OperatorInfo {
   domain: string;
   wanIp: string | null;
