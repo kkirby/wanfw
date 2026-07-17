@@ -61,7 +61,10 @@ export async function invokeTrustedPlugin(
       limits,
     })) as InvocationOutcome;
 
-    deps.auditLog.append({ type: "plugin.invoke", details: { pluginId, task, ok: result.ok } });
+    deps.auditLog.append({
+      type: "plugin.invoke",
+      details: { pluginId, task, ok: result.ok, ...(result.error ? { error: result.error } : {}) },
+    });
     return result;
   } catch (err) {
     const message = (err as Error).message;
