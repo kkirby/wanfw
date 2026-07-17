@@ -92,7 +92,11 @@ export async function runInit(deps: InitDeps): Promise<number> {
   const acmeEmail = await requireAnswer(deps, "ACME account email");
 
   deps.stdout("\nDNS provider credentials (Namecheap) -- stored via the secrets store, never logged.");
+  deps.stdout("  API User: the Namecheap account enabled for API access (enable this under Namecheap's");
+  deps.stdout("    Profile > Tools > API Access).");
   const apiUser = await requireAnswer(deps, "  Namecheap API user");
+  deps.stdout("  Username: the account that owns/manages the domain -- almost always the same value as");
+  deps.stdout("    API User (only differs for reseller/sub-account setups). If unsure, enter it again.");
   const username = await requireAnswer(deps, "  Namecheap username");
   const apiKey = await requireAnswer(deps, "  Namecheap API key");
 

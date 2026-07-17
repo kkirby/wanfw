@@ -113,6 +113,8 @@ describe("runInit (T5.3 wizard)", () => {
     expect(new Date(tokenFile.createdAt).getTime()).toBeGreaterThan(0);
 
     expect(out.lines.some((l) => l.includes("setup token"))).toBe(true);
+    expect(out.lines.some((l) => l.includes("API User: the Namecheap account enabled for API access"))).toBe(true);
+    expect(out.lines.some((l) => l.includes("almost always the same value as"))).toBe(true);
 
     const operatorInfoCall = calls.find((c) => c.path === "/operator-info");
     const operatorInfo = operatorInfoCall!.body as { domain: string; wanIp: string; networkProvider: string; instructions: string[] };
