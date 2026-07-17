@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Alert, Code, Stack } from "@mantine/core";
+import { Code, Stack, Text } from "@mantine/core";
+import { StageErrorAlert } from "../../components/error-alert/ErrorAlert";
 
 interface FrameworkStatus {
   phase?: string;
@@ -30,12 +31,22 @@ export function StatusPoller({ initialStatus }: { initialStatus: unknown }) {
 
   return (
     <Stack>
-      {framework?.phase === "degraded" && (
-        <Alert color="orange" title="Framework degraded">
-          {framework.lastError?.message ?? "the framework reports a degraded state"}
-        </Alert>
-      )}
-      <Code block>{JSON.stringify(status, null, 2)}</Code>
+      {framework?.phase === "degraded" &&
+        (framework.lastError ? (
+          <StageErrorAlert error={framework.lastError} color="orange" />
+        ) : (
+          <StageErrorAlert error={{ stage: "unknown", message: "the framework reports a degraded state" }} color="orange" />
+        ))}
+      {/* Native <details> rather than Mantine's Spoiler: needs no client JS
+          to work at all, so it can't silently fail to render its toggle. */}
+      <details>
+        <summary>
+          <Text component="span" size="sm" c="dimmed">
+            Raw status
+          </Text>
+        </summary>
+        <Code block>{JSON.stringify(status, null, 2)}</Code>
+      </details>
     </Stack>
   );
 }

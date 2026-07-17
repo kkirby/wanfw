@@ -31,9 +31,9 @@ export function UnreachableAlert({ message }: { message: string }) {
  * this doesn't discard `stage`/`plugin`, the two fields that say *where*
  * the problem is, not just what it is.
  */
-export function StageErrorAlert({ error, color }: { error: StageError; color?: string }) {
+export function StageErrorAlert({ error, color, title }: { error: StageError; color?: string; title?: string }) {
   return (
-    <Alert color={color ?? PHASE_COLOR.degraded} title="Degraded">
+    <Alert color={color ?? PHASE_COLOR.degraded} title={title ?? "Degraded"}>
       <Group gap="xs" mb={4}>
         <Badge color={color ?? PHASE_COLOR.degraded} variant="light">
           {error.stage}
