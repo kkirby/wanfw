@@ -173,7 +173,24 @@ docker compose -f deploy/docker-compose.yml up -d
 
 A straightforward `pull` + `up -d`, per spec §16. Base images are pinned by digest in the published compose file and Dockerfiles (T6.3); bumping wanfw itself means pulling new framework images, not chasing floating tags.
 
-## 14. Exit codes
+## 14. Uninstalling wanfw
+
+Per ADR-9, the orchestrator creates several Docker objects directly via the Docker API rather than declaring them in the compose file: the proxy container, the exposure network, and every per-service (`wanfw_svc_<id>`) network. `docker compose down` only ever sees what's in the compose file, so it structurally cannot remove these -- run alone, it always leaves networks (and containers, if the orchestrator itself is unhealthy) behind.
+
+Tear wanfw down completely in two steps:
+
+```sh
+wanfwctl uninstall                             # removes every wanfw.managed object compose can't see
+wanfwctl uninstall --remove-volumes --yes      # also destroys wanfw-managed data volumes (irreversible)
+docker compose -f deploy/docker-compose.yml down       # removes the compose-declared containers
+docker compose -f deploy/docker-compose.yml down -v    # ...and add -v to also wipe compose-declared volumes (state, certs, secrets)
+```
+
+`wanfwctl uninstall` always previews the plan (every container/network it will remove, and every volume too if `--remove-volumes` is passed) and asks for confirmation before touching anything; pass `--yes` to skip the prompt for scripted use. Volumes are opt-in only (`--remove-volumes`) since they hold real service data -- an operator who just wants to redeploy cleanly, not destroy data, should omit it.
+
+Because `wanfwctl` only ever runs via `docker exec` into the still-live orchestrator container, run `wanfwctl uninstall` *before* `docker compose down` -- once the orchestrator container itself is gone, there's nothing left to exec into. If the orchestrator is crash-looping and `docker exec` won't work, `docker compose down -v` alone will still remove the compose-managed containers and volumes; the leftover Docker-API-direct networks (and orphaned volumes, if any) then have to be cleaned up by hand with `docker network rm`/`docker volume rm` using the `wanfw.managed=true` label as a guide (`docker network ls --filter label=wanfw.managed=true`, `docker volume ls --filter label=wanfw.managed=true`).
+
+## 15. Exit codes
 
 | Code | Name | Meaning |
 |---|---|---|
@@ -186,7 +203,7 @@ A straightforward `pull` + `up -d`, per spec §16. Base images are pinned by dig
 | 6 | refused | trust/hash mismatch, capability violation, or audit tamper detected |
 | 7 | daemonUnreachable | could not reach the orchestrator admin socket |
 
-## 15. Further reading
+## 16. Further reading
 
 - `docs/threat-model.md` -- what wanfw actually protects against, what it doesn't, and why.
 - `docs/plugin-authoring.md` -- writing a third-party plugin (network provider, DNS provider, cert issuer, deploy driver).

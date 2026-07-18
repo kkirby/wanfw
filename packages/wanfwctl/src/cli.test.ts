@@ -625,4 +625,93 @@ describe("wanfwctl-inner CLI", () => {
     expect(code).toBe(EXIT_CODES.validationFailure);
     expect(out.lines.some((l) => l.includes("[FAIL] proxy-container"))).toBe(true);
   });
+
+  async function bootUninstallRouter(opts: { unavailable?: boolean } = {}) {
+    const calls: Array<{ removeVolumes?: boolean; dryRun?: boolean }> = [];
+    const router = new JsonUdsRouter();
+    router.register("POST", "/uninstall", async ({ body }) => {
+      if (opts.unavailable) {
+        return { status: 501, body: { error: "docker_unavailable", message: "no Docker client configured" } };
+      }
+      const { removeVolumes, dryRun } = (body ?? {}) as { removeVolumes?: boolean; dryRun?: boolean };
+      calls.push({ removeVolumes, dryRun });
+      return {
+        status: 200,
+        body: {
+          containers: ["wanfw-proxy"],
+          networks: ["wanfw_exposure", "wanfw_svc_kavita"],
+          volumes: removeVolumes ? ["wanfw_kavita_config"] : [],
+        },
+      };
+    });
+    const dir = await mkdtemp(join(tmpdir(), "wanfw-cli-uninstall-"));
+    dirs.push(dir);
+    const socketPath = join(dir, "admin.sock");
+    servers.push(listenOnUnixSocket(router, socketPath));
+    await new Promise((r) => setTimeout(r, 50));
+    return { socketPath, calls };
+  }
+
+  it("uninstall: previews the plan, prompts, and on 'y' performs the real removal", async () => {
+    const { socketPath, calls } = await bootUninstallRouter();
+    const out = captureOutput();
+    const code = await runCli(["uninstall"], {
+      adminSocketPath: socketPath,
+      ...out,
+      prompt: async () => "y",
+    });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(calls).toEqual([
+      { removeVolumes: undefined, dryRun: true },
+      { removeVolumes: undefined, dryRun: false },
+    ]);
+    expect(out.lines.some((l) => l.includes("container: wanfw-proxy"))).toBe(true);
+    expect(out.lines.some((l) => l.includes("network:   wanfw_exposure"))).toBe(true);
+    expect(out.lines.some((l) => l.includes("removed 1 container(s), 2 network(s), 0 volume(s)"))).toBe(true);
+    expect(out.lines.some((l) => l.includes("docker compose down"))).toBe(true);
+  });
+
+  it("uninstall: aborts without calling the real removal when the operator declines", async () => {
+    const { socketPath, calls } = await bootUninstallRouter();
+    const out = captureOutput();
+    const code = await runCli(["uninstall"], {
+      adminSocketPath: socketPath,
+      ...out,
+      prompt: async () => "n",
+    });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(calls).toEqual([{ removeVolumes: undefined, dryRun: true }]);
+    expect(out.lines.some((l) => l.includes("aborted"))).toBe(true);
+  });
+
+  it("uninstall --yes: skips the prompt entirely", async () => {
+    const { socketPath, calls } = await bootUninstallRouter();
+    const out = captureOutput();
+    const code = await runCli(["uninstall", "--yes"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(calls).toEqual([
+      { removeVolumes: undefined, dryRun: true },
+      { removeVolumes: undefined, dryRun: false },
+    ]);
+  });
+
+  it("uninstall --remove-volumes: includes volumes in the plan and the real request", async () => {
+    const { socketPath, calls } = await bootUninstallRouter();
+    const out = captureOutput();
+    const code = await runCli(["uninstall", "--remove-volumes", "--yes"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(calls).toEqual([
+      { removeVolumes: true, dryRun: true },
+      { removeVolumes: true, dryRun: false },
+    ]);
+    expect(out.lines.some((l) => l.includes("volume:    wanfw_kavita_config (DATA WILL BE DESTROYED)"))).toBe(true);
+  });
+
+  it("uninstall: exits internalError with a clear message when no Docker client is configured", async () => {
+    const { socketPath } = await bootUninstallRouter({ unavailable: true });
+    const out = captureOutput();
+    const code = await runCli(["uninstall", "--yes"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.internalError);
+    expect(out.errLines.join("")).toMatch(/no Docker client is configured/);
+  });
 });

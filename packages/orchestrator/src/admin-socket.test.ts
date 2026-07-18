@@ -10,6 +10,7 @@ import type { HeartbeatState } from "./heartbeat.js";
 import { StateStore } from "./state-store/store.js";
 import { SigningKeyManager } from "./signing-key.js";
 import { AuditLog } from "./audit-log.js";
+import { FakeDockerClient } from "./execute/fake-docker-client.js";
 
 function requestOverSocket(socketPath: string, method: string, path: string, body?: unknown): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
@@ -419,5 +420,108 @@ describe("admin socket: /plugins/trust-builtins ids filter (T5.3)", () => {
 
     const usageRes = await requestOverSocket(socketPath, "POST", "/network/probe-macvlan", {});
     expect(usageRes.status).toBe(400);
+  });
+});
+
+describe("admin socket: POST /uninstall -- removes every wanfw.managed object docker compose down can't see", () => {
+  const dirs: string[] = [];
+  const servers: Server[] = [];
+  const stores: StateStore[] = [];
+
+  afterEach(async () => {
+    servers.splice(0).forEach((s) => s.close());
+    stores.splice(0).forEach((s) => s.close());
+    await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true }).catch(() => {})));
+  });
+
+  async function boot(docker?: FakeDockerClient) {
+    const heartbeat: HeartbeatState = { current: { phase: "pending-init", ts: "x", version: "0.1.0" } };
+    const dbDir = await mkdtemp(join(tmpdir(), "wanfw-admin-uninstall-"));
+    dirs.push(dbDir);
+    const store = new StateStore(join(dbDir, "state.sqlite3"));
+    stores.push(store);
+    const keyDir = await mkdtemp(join(tmpdir(), "wanfw-admin-uninstall-key-"));
+    dirs.push(keyDir);
+    const signingKeyHolder = { manager: await SigningKeyManager.loadOrCreate(join(keyDir, "signing.key")), keyPath: join(keyDir, "signing.key") };
+    const auditDir = await mkdtemp(join(tmpdir(), "wanfw-admin-uninstall-audit-"));
+    dirs.push(auditDir);
+    const auditLog = new AuditLog(join(auditDir, "audit.jsonl"), () => signingKeyHolder.manager);
+    const stagingDir = await mkdtemp(join(tmpdir(), "wanfw-admin-uninstall-staging-"));
+    dirs.push(stagingDir);
+    const socketDir = await mkdtemp(join(tmpdir(), "wanfw-admin-uninstall-sock-"));
+    dirs.push(socketDir);
+
+    const router = buildAdminSocketRouter({
+      heartbeat,
+      signingKeyHolder,
+      store,
+      auditLog,
+      pluginConnectionHolder: {},
+      stagingDir,
+      bundlesDir: stagingDir,
+      statusDir: stagingDir,
+      secretsDir: stagingDir,
+      certsDir: stagingDir,
+      gateSnapshotHolder: { services: new Map() },
+      docker,
+    });
+    const socketPath = join(socketDir, "admin.sock");
+    servers.push(listenOnUnixSocket(router, socketPath, 0o600));
+    await new Promise((r) => setTimeout(r, 50));
+    return { socketPath, auditLog };
+  }
+
+  async function seededDocker(): Promise<FakeDockerClient> {
+    const docker = new FakeDockerClient();
+    await docker.createContainer({ name: "wanfw-proxy", image: "caddy:2", labels: { "wanfw.managed": "true", "wanfw.core": "true" } });
+    await docker.createNetwork("wanfw_exposure", { "wanfw.managed": "true", "wanfw.core": "true" });
+    await docker.createNetwork("wanfw_svc_kavita", { "wanfw.managed": "true", "wanfw.service": "kavita" });
+    await docker.createVolume("wanfw_kavita_config", { "wanfw.managed": "true", "wanfw.service": "kavita" });
+    return docker;
+  }
+
+  it("returns 501 when no Docker client is configured", async () => {
+    const { socketPath } = await boot(undefined);
+    const res = await requestOverSocket(socketPath, "POST", "/uninstall");
+    expect(res.status).toBe(501);
+  });
+
+  it("dryRun lists every managed container/network without removing anything", async () => {
+    const docker = await seededDocker();
+    const { socketPath } = await boot(docker);
+    const res = await requestOverSocket(socketPath, "POST", "/uninstall", { dryRun: true });
+    expect(res.status).toBe(200);
+    expect((res.body as { containers: string[] }).containers).toEqual(["wanfw-proxy"]);
+    expect((res.body as { networks: string[] }).networks.sort()).toEqual(["wanfw_exposure", "wanfw_svc_kavita"]);
+    // Nothing actually removed.
+    expect(await docker.findManagedContainerByName("wanfw-proxy")).toBeDefined();
+    expect(await docker.findManagedNetworkByName("wanfw_exposure")).toBeDefined();
+  });
+
+  it("removes every managed container and network, but leaves volumes alone by default", async () => {
+    const docker = await seededDocker();
+    const { socketPath, auditLog } = await boot(docker);
+    const res = await requestOverSocket(socketPath, "POST", "/uninstall");
+    expect(res.status).toBe(200);
+
+    expect(await docker.findManagedContainerByName("wanfw-proxy")).toBeUndefined();
+    expect(await docker.findManagedNetworkByName("wanfw_exposure")).toBeUndefined();
+    expect(await docker.findManagedNetworkByName("wanfw_svc_kavita")).toBeUndefined();
+    // Volume survives -- destroying real service data is never a side effect of the default call.
+    expect(await docker.findManagedVolumeByName("wanfw_kavita_config")).toBeDefined();
+
+    const entries = auditLog.readAll();
+    const entry = entries.find((e) => e.type === "framework.uninstall");
+    expect(entry).toBeDefined();
+    expect(entry!.checkpointSig).toBeTruthy(); // security-relevant type, always checkpointed
+  });
+
+  it("removeVolumes:true also removes managed volumes", async () => {
+    const docker = await seededDocker();
+    const { socketPath } = await boot(docker);
+    const res = await requestOverSocket(socketPath, "POST", "/uninstall", { removeVolumes: true });
+    expect(res.status).toBe(200);
+    expect((res.body as { volumes: string[] }).volumes).toEqual(["wanfw_kavita_config"]);
+    expect(await docker.findManagedVolumeByName("wanfw_kavita_config")).toBeUndefined();
   });
 });

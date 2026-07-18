@@ -494,6 +494,80 @@ export function buildProgram(deps: CliDeps): Command {
     });
 
   program
+    .command("uninstall")
+    .description(
+      "Remove every wanfw.managed Docker object `docker compose down` can't see (proxy container, exposure network, per-service networks; volumes only with --remove-volumes)",
+    )
+    .option("--remove-volumes", "also remove wanfw-managed volumes (destroys service data -- irreversible)")
+    .option("--yes", "skip the confirmation prompt (required for non-interactive use)")
+    .action(async (opts: { removeVolumes?: boolean; yes?: boolean }) => {
+      const planRes = await adminRequest(deps.adminSocketPath, "POST", "/uninstall", {
+        removeVolumes: opts.removeVolumes,
+        dryRun: true,
+      }).catch((err) => {
+        if (err instanceof AdminSocketUnreachableError) {
+          deps.stderr(`error: orchestrator admin socket unreachable: ${err.message}`);
+          process.exitCode = EXIT_CODES.daemonUnreachable;
+        } else {
+          deps.stderr(`error: ${(err as Error).message}`);
+          process.exitCode = EXIT_CODES.internalError;
+        }
+        return undefined;
+      });
+      if (!planRes) return;
+      if (planRes.status === 501) {
+        deps.stderr("error: no Docker client is configured on the orchestrator -- nothing to uninstall");
+        process.exitCode = EXIT_CODES.internalError;
+        return;
+      }
+      if (planRes.status < 200 || planRes.status >= 300) {
+        deps.stderr(`error: admin socket returned ${planRes.status}: ${JSON.stringify(planRes.body)}`);
+        process.exitCode = EXIT_CODES.internalError;
+        return;
+      }
+
+      const plan = planRes.body as { containers: string[]; networks: string[]; volumes: string[] };
+      if (plan.containers.length === 0 && plan.networks.length === 0 && plan.volumes.length === 0) {
+        deps.stdout("nothing to remove -- no wanfw.managed Docker objects found.");
+        return;
+      }
+
+      deps.stdout("This will remove the following Docker objects that `docker compose down` cannot see:");
+      for (const name of plan.containers) deps.stdout(`  container: ${name}`);
+      for (const name of plan.networks) deps.stdout(`  network:   ${name}`);
+      if (opts.removeVolumes) {
+        for (const name of plan.volumes) deps.stdout(`  volume:    ${name} (DATA WILL BE DESTROYED)`);
+      } else {
+        deps.stdout("  (volumes left alone -- re-run with --remove-volumes to also destroy service data)");
+      }
+
+      if (!opts.yes) {
+        const prompt = deps.prompt ?? defaultPrompt;
+        const answer = await prompt("Proceed? [y/N] ");
+        if (!/^y(es)?$/i.test(answer.trim())) {
+          deps.stdout("aborted.");
+          return;
+        }
+      }
+
+      await withAdminRequest(
+        deps,
+        "POST",
+        "/uninstall",
+        { removeVolumes: opts.removeVolumes, dryRun: false },
+        (body) => {
+          const result = body as { containers: string[]; networks: string[]; volumes: string[] };
+          deps.stdout(
+            `removed ${result.containers.length} container(s), ${result.networks.length} network(s), ${result.volumes.length} volume(s).`,
+          );
+          deps.stdout("");
+          deps.stdout("Next: run `docker compose down` to remove the remaining compose-declared containers/volumes");
+          deps.stdout("(add `-v` there too for a full wipe of state/certs/secrets).");
+        },
+      );
+    });
+
+  program
     .command("doctor")
     .description("Diagnose the running deployment (T5.4): Docker socket, proxy container, network provider, WAN IP vs DNS, DNS provider credentials")
     .action(async () => {
