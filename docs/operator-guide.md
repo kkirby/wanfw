@@ -173,6 +173,14 @@ docker compose -f deploy/docker-compose.yml up -d
 
 A straightforward `pull` + `up -d`, per spec §16. Base images are pinned by digest in the published compose file and Dockerfiles (T6.3); bumping wanfw itself means pulling new framework images, not chasing floating tags.
 
+**If the update changed any built-in plugin's code**, also re-trust the built-ins afterward:
+
+```sh
+wanfwctl plugin trust --builtin-all --yes
+```
+
+This matters because trust pins the *exact bytes* a plugin was trusted with, in a persistent volume (`wanfw_bundles`) -- completely separate from whatever code is currently sitting in the freshly-pulled image. Every invocation runs whatever's currently trusted, not whatever the container happens to ship. Skipping this step means the new image is running, but every plugin invocation (including the reconciler's own automatic cert renewal, DNS updates, etc.) silently keeps executing the *old* code -- often producing the exact same failure as before the update, with no indication anything is stale.
+
 ## 14. Uninstalling wanfw
 
 Per ADR-9, the orchestrator creates several Docker objects directly via the Docker API rather than declaring them in the compose file: the proxy container, the exposure network, and every per-service (`wanfw_svc_<id>`) network. `docker compose down` only ever sees what's in the compose file, so it structurally cannot remove these -- run alone, it always leaves networks (and containers, if the orchestrator itself is unhealthy) behind.

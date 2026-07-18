@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import { get as httpsGet } from "node:https";
 import { applyDnsRecord, type DnsApplyInput } from "./apply.js";
-import type { FetchFn, NamecheapConfig } from "./namecheap-client.js";
+import { registrableZone, type FetchFn, type NamecheapConfig } from "./namecheap-client.js";
 
 /**
  * Hand-rolled NDJSON JSON-RPC loop -- same reasoning as every other v1
@@ -27,6 +27,23 @@ async function getSecret(name: string): Promise<string> {
   const res = (await callHost("secrets.get", { name })) as { value: string | null };
   if (!res.value) throw new Error(`missing required secret '${name}' -- set it with: wanfwctl secret set ${name}`);
   return res.value;
+}
+
+/**
+ * Real progress visibility (found genuinely missing during a live
+ * debugging session -- every step of the Namecheap round trip was a black
+ * box until an operator saw the final error, or nothing at all on
+ * success). `log.emit` already lands in the orchestrator's own structured
+ * log (`docker logs wanfw-orchestrator`), so this is real-time-visible,
+ * not just a post-mortem aid. Best-effort: a logging call itself must
+ * never be what breaks a DNS update.
+ */
+async function logStep(level: "info" | "warn" | "error", msg: string, fields?: Record<string, unknown>): Promise<void> {
+  try {
+    await callHost("log.emit", { level, msg, fields });
+  } catch {
+    // never let logging itself fail the actual task
+  }
 }
 
 /**
@@ -100,9 +117,23 @@ rl.on("line", (line) => {
         process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32601, message: `no such task: ${msg.method}` } })}\n`);
         return;
       }
+      const input = msg.params as DnsApplyInput;
+      await logStep("info", "dns.apply starting", {
+        zone: input.zone,
+        registrableZone: registrableZone(input.zone),
+        action: input.action,
+        recordType: input.record.type,
+        recordName: input.record.name,
+      });
       const config = await loadConfig();
-      const result = await applyDnsRecord(realFetch, config, msg.params as DnsApplyInput);
-      process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+      try {
+        const result = await applyDnsRecord(realFetch, config, input);
+        await logStep("info", "dns.apply succeeded", { zone: input.zone, action: input.action, recordName: input.record.name });
+        process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+      } catch (err) {
+        await logStep("error", "dns.apply failed", { zone: input.zone, action: input.action, recordName: input.record.name, error: (err as Error).message });
+        throw err;
+      }
     } catch (err) {
       process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: (err as Error).message } })}\n`);
     }
