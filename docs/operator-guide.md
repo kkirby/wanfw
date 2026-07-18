@@ -49,8 +49,13 @@ It will ask for, in order:
    - **API user**: the Namecheap account enabled for API access (Namecheap: Profile > Tools > API Access).
    - **Username**: the account that owns/manages the domain -- almost always the same value as API user (only differs for reseller/sub-account setups; if unsure, enter it again).
    - **API key**.
-3. **Network provider**: bridge (default -- publishes 443/80 directly on the host) or macvlan (a dedicated LAN IP for the proxy; see §5 before choosing this).
-4. Nothing else -- it then batch-trusts the production plugin builtins, writes the framework document, and waits (up to 30s) for the first reconcile to bring the proxy up.
+3. **Network provider**: bridge (default -- publishes 443/80 directly on the host) or macvlan (a dedicated LAN IP for the proxy; see §5 before choosing this). Choosing macvlan live-probes the interface against the real Docker daemon before anything is written.
+
+Then a **review step** lists all three sections and asks you to confirm, or enter `1`/`2`/`3` to jump back and re-answer just that section (`q` aborts). If the macvlan probe fails, you land back at the review automatically -- fix the network section and confirm again rather than restarting the wizard from scratch.
+
+Once confirmed, it batch-trusts the production plugin builtins, writes the framework document, and waits (up to 30s) for the first reconcile to bring the proxy up.
+
+**Re-running `wanfwctl init` against an existing setup** prefills every prompt with its current value -- press Enter to keep it. DNS credentials can't be redisplayed (they're never readable back once stored), so instead each one that's already set becomes optional: Enter leaves it untouched, or type a new value to replace it. Fields that were never set are still required.
 
 When it finishes, it prints:
 

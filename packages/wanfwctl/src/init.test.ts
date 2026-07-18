@@ -29,15 +29,24 @@ describe("runInit (T5.3 wizard)", () => {
     existingFramework?: unknown;
     wanIp?: string | null;
     statusOk?: string;
-    probeMacvlan?: { ok: boolean; reason?: string };
+    probeMacvlan?: { ok: boolean; reason?: string } | Array<{ ok: boolean; reason?: string }>;
+    existingSecretNames?: string[];
   }) {
     const router = new JsonUdsRouter();
     const calls: Array<{ method: string; path: string; body?: unknown }> = [];
 
     router.register("GET", "/framework", async () => ({ status: 200, body: { framework: overrides?.existingFramework ?? null } }));
+    router.register("GET", "/secrets", async () => ({
+      status: 200,
+      body: { secrets: (overrides?.existingSecretNames ?? []).map((name) => ({ name, lastRotated: "2026-01-01T00:00:00.000Z" })) },
+    }));
+    let probeCallCount = 0;
     router.register("POST", "/network/probe-macvlan", async ({ body }) => {
       calls.push({ method: "POST", path: "/network/probe-macvlan", body });
-      return { status: 200, body: overrides?.probeMacvlan ?? { ok: true } };
+      const probeMacvlan = overrides?.probeMacvlan ?? { ok: true };
+      const result = Array.isArray(probeMacvlan) ? (probeMacvlan[probeCallCount] ?? probeMacvlan.at(-1)!) : probeMacvlan;
+      probeCallCount += 1;
+      return { status: 200, body: result };
     });
     router.register("POST", "/plugins/trust-builtins", async ({ body }) => {
       calls.push({ method: "POST", path: "/plugins/trust-builtins", body });
@@ -190,7 +199,7 @@ describe("runInit (T5.3 wizard)", () => {
     });
   });
 
-  it("aborts before writing the framework doc when the live macvlan probe fails", async () => {
+  it("loops back to the review (does not hard-abort) when the live macvlan probe fails, and the operator can then quit", async () => {
     const { socketPath, statusDir, calls } = await bootFakeAdmin({ probeMacvlan: { ok: false, reason: "no promiscuous mode on 'eth0.50'" } });
     const out = captureOutput();
     const prompt = scriptedPrompt([
@@ -205,15 +214,169 @@ describe("runInit (T5.3 wizard)", () => {
       "50", // VLAN ID
       "192.168.1.240/29", // reservedCidr
       "192.168.1.1", // gateway
+      "", // Proceed? -> confirm -> probe fails -> loops back to review
+      "q", // abort instead of retrying
     ]);
 
     const code = await runInit({ adminSocketPath: socketPath, stdout: out.stdout, stderr: out.stderr, prompt, statusDir, sleep: async () => {} });
-    expect(code).toBe(1);
-    expect(out.errLines.some((l) => l.includes("no promiscuous mode on 'eth0.50'"))).toBe(true);
+    expect(code).toBe(0);
+    expect(out.lines).toContain("aborted");
+    expect(out.lines.some((l) => l.includes("no promiscuous mode on 'eth0.50'"))).toBe(true);
     expect(calls.find((c) => c.path === "/framework")).toBeUndefined();
 
     const probeCall = calls.find((c) => c.path === "/network/probe-macvlan");
     expect((probeCall!.body as { parent: string }).parent).toBe("eth0.50");
+  });
+
+  it("recovers from a failed macvlan probe by jumping back to section 3, fixing the interface, and re-confirming", async () => {
+    const { socketPath, statusDir, calls } = await bootFakeAdmin({
+      probeMacvlan: [{ ok: false, reason: "no promiscuous mode on 'eth0.50'" }, { ok: true }],
+    });
+    const out = captureOutput();
+    const prompt = scriptedPrompt([
+      "example.tld",
+      "ops@example.tld",
+      "myuser",
+      "myusername",
+      "mykey",
+      "y", // use macvlan? yes
+      "y", // is your LAN VLAN-segmented? yes
+      "eth0", // base interface
+      "50", // VLAN ID
+      "192.168.1.240/29", // reservedCidr
+      "192.168.1.1", // gateway
+      "", // Proceed? -> confirm -> probe #1 fails -> back to review
+      "3", // jump to network section to fix it
+      "y", // use macvlan? yes (default carried over)
+      "n", // is your LAN VLAN-segmented? no this time -- plain interface
+      "eth0", // parent (no VLAN)
+      "192.168.1.240/29", // reservedCidr
+      "192.168.1.1", // gateway
+      "", // Proceed? -> confirm -> probe #2 passes
+    ]);
+
+    const code = await runInit({ adminSocketPath: socketPath, stdout: out.stdout, stderr: out.stderr, prompt, statusDir, sleep: async () => {} });
+    expect(code).toBe(0);
+
+    const probeCalls = calls.filter((c) => c.path === "/network/probe-macvlan");
+    expect(probeCalls).toHaveLength(2);
+    expect((probeCalls[0]!.body as { parent: string }).parent).toBe("eth0.50");
+    expect((probeCalls[1]!.body as { parent: string }).parent).toBe("eth0");
+
+    const frameworkCall = calls.find((c) => c.path === "/framework");
+    const spec = (frameworkCall!.body as { spec: Record<string, unknown> }).spec;
+    expect(spec.network).toEqual({
+      lanInterface: "eth0",
+      macvlan: { parent: "eth0", reservedCidr: "192.168.1.240/29", gateway: "192.168.1.1" },
+    });
+  });
+
+  it("prints a review listing all three sections before committing anything", async () => {
+    const { socketPath, statusDir } = await bootFakeAdmin();
+    const out = captureOutput();
+    const prompt = scriptedPrompt(["example.tld", "ops@example.tld", "myuser", "myusername", "mykey", "n"]);
+    await runInit({ adminSocketPath: socketPath, stdout: out.stdout, stderr: out.stderr, prompt, statusDir, sleep: async () => {} });
+
+    expect(out.lines.some((l) => l.includes("--- Review ---"))).toBe(true);
+    expect(out.lines.some((l) => l.includes("1) Domain & ACME email: example.tld / ops@example.tld"))).toBe(true);
+    expect(out.lines.some((l) => l.includes("2) DNS credentials") && l.includes("new value provided"))).toBe(true);
+    expect(out.lines.some((l) => l.includes("3) Network: bridge"))).toBe(true);
+  });
+
+  it("jumping back to section 1 from the review re-collects domain/ACME email and reflects the change in the framework doc", async () => {
+    const { socketPath, statusDir, calls } = await bootFakeAdmin();
+    const out = captureOutput();
+    const prompt = scriptedPrompt([
+      "typo.tld",
+      "ops@example.tld",
+      "myuser",
+      "myusername",
+      "mykey",
+      "n", // use macvlan? no
+      "1", // jump back to fix the domain
+      "example.tld", // corrected domain
+      "ops@example.tld", // acmeEmail (re-asked, same answer)
+      "", // Proceed? -> confirm
+    ]);
+
+    const code = await runInit({ adminSocketPath: socketPath, stdout: out.stdout, stderr: out.stderr, prompt, statusDir, sleep: async () => {} });
+    expect(code).toBe(0);
+
+    const frameworkCall = calls.find((c) => c.path === "/framework");
+    const spec = (frameworkCall!.body as { spec: Record<string, unknown> }).spec;
+    expect(spec.domain).toBe("example.tld");
+  });
+
+  it("re-running with an existing framework document prefills domain/ACME/network as defaults, and DNS fields already in the secrets store become optional (Enter keeps them, nothing re-POSTed)", async () => {
+    const { socketPath, statusDir, calls } = await bootFakeAdmin({
+      existingFramework: {
+        spec: {
+          domain: "example.tld",
+          acmeEmail: "ops@example.tld",
+          roles: { networkProvider: "network-macvlan" },
+          network: { lanInterface: "eth0.50", macvlan: { parent: "eth0.50", reservedCidr: "192.168.1.240/29", gateway: "192.168.1.1" } },
+        },
+      },
+      existingSecretNames: ["dns-namecheap/api-user", "dns-namecheap/username", "dns-namecheap/api-key"],
+    });
+    const out = captureOutput();
+    const prompt = scriptedPrompt([
+      "y", // edit the existing framework doc?
+      "", // domain -> keep default (example.tld)
+      "", // acmeEmail -> keep default
+      "", // api-user -> keep current (already set)
+      "", // username -> keep current
+      "", // api-key -> keep current
+      "", // use macvlan? -> keep default (yes, prefilled from existing doc)
+      "", // is your LAN VLAN-segmented? -> keep default (yes, derived from 'eth0.50')
+      "", // base interface -> keep default 'eth0'
+      "", // VLAN ID -> keep default '50'
+      "", // reservedCidr -> keep default
+      "", // gateway -> keep default
+      "", // Proceed? -> confirm
+    ]);
+
+    const code = await runInit({ adminSocketPath: socketPath, stdout: out.stdout, stderr: out.stderr, prompt, statusDir, sleep: async () => {} });
+    expect(code).toBe(0);
+
+    // Nothing was re-typed for any DNS field, so none of them get re-POSTed.
+    expect(calls.filter((c) => c.path === "/secrets")).toHaveLength(0);
+
+    const frameworkCall = calls.find((c) => c.path === "/framework");
+    const spec = (frameworkCall!.body as { spec: Record<string, unknown> }).spec;
+    expect(spec.domain).toBe("example.tld");
+    expect(spec.network).toEqual({
+      lanInterface: "eth0.50",
+      macvlan: { parent: "eth0.50", reservedCidr: "192.168.1.240/29", gateway: "192.168.1.1" },
+    });
+  });
+
+  it("re-running still requires a DNS field that was never actually set, even with an existing framework document", async () => {
+    const { socketPath, statusDir, calls } = await bootFakeAdmin({
+      existingFramework: { spec: { domain: "example.tld", acmeEmail: "ops@example.tld", roles: { networkProvider: "network-bridge" } } },
+      existingSecretNames: ["dns-namecheap/api-user", "dns-namecheap/username"], // api-key was never set
+    });
+    const out = captureOutput();
+    const prompt = scriptedPrompt([
+      "y", // edit?
+      "", // domain -> keep
+      "", // acmeEmail -> keep
+      "", // api-user -> keep current
+      "", // username -> keep current
+      "", // api-key -> blank, but not keep-able (never set) -> re-prompted
+      "newkey", // api-key -> now provided
+      "", // use macvlan? -> keep default (no)
+      "", // Proceed? -> confirm
+    ]);
+
+    const code = await runInit({ adminSocketPath: socketPath, stdout: out.stdout, stderr: out.stderr, prompt, statusDir, sleep: async () => {} });
+    expect(code).toBe(0);
+    expect(out.lines.some((l) => l.includes("(required)"))).toBe(true);
+
+    const secretCalls = calls.filter((c) => c.path === "/secrets");
+    expect(secretCalls).toHaveLength(1);
+    expect((secretCalls[0]!.body as { name: string; value: string }).name).toBe("dns-namecheap/api-key");
+    expect((secretCalls[0]!.body as { name: string; value: string }).value).toBe("newkey");
   });
 
   it("re-prompts on a malformed CIDR/gateway/interface answer instead of passing it through", async () => {
