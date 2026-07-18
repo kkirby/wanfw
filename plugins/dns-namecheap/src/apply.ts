@@ -1,7 +1,7 @@
-import { getHosts, setHosts, type DnsHost, type FetchFn, type NamecheapConfig } from "./namecheap-client.js";
+import { getHosts, setHosts, registrableZone, type DnsHost, type FetchFn, type NamecheapConfig } from "./namecheap-client.js";
 
 export interface DnsApplyInput {
-  zone: string; // e.g. "example.tld"
+  zone: string; // e.g. "example.tld" -- the caller's base domain; not necessarily the exact registered Namecheap domain, see registrableZone()
   action: "set" | "delete";
   record: { type: string; name: string; value: string; ttl?: number };
 }
@@ -10,6 +10,26 @@ export type DnsApplyOutput = Record<string, never>;
 
 function recordKey(h: Pick<DnsHost, "type" | "name">): string {
   return `${h.type}:${h.name}`;
+}
+
+/**
+ * Callers (cert-letsencrypt-dns01's `txtRecordNameFor`) hand us the
+ * ABSOLUTE record name (e.g. "_acme-challenge.kavita.home.example.com"),
+ * matching the ADR-1 host-API contract's own docs ("the registrable DNS
+ * zone" is a separate concept from the record name). Namecheap's `Name`
+ * host-record field, however, is always relative to the SLD.TLD it's
+ * managing -- multi-label relative values ARE supported (Namecheap
+ * creates the full nested subdomain from a dotted Name, e.g.
+ * "_acme-challenge.kavita.home" under domain "example.com" correctly
+ * produces "_acme-challenge.kavita.home.example.com"), so stripping just
+ * the registrable-zone suffix (not the full requested `zone`, which may
+ * itself be a non-registrable subdomain) preserves the rest of the
+ * label chain intact.
+ */
+function relativeToZone(name: string, zone: string): string {
+  if (name === zone) return "@";
+  const suffix = `.${zone}`;
+  return name.endsWith(suffix) ? name.slice(0, -suffix.length) : name;
 }
 
 /**
@@ -26,19 +46,18 @@ function recordKey(h: Pick<DnsHost, "type" | "name">): string {
  * either way it's called).
  */
 export async function applyDnsRecord(fetchFn: FetchFn, config: NamecheapConfig, input: DnsApplyInput): Promise<DnsApplyOutput> {
-  const existing = await getHosts(fetchFn, config, input.zone);
-  const key = recordKey(input.record);
+  const zone = registrableZone(input.zone);
+  const relativeName = relativeToZone(input.record.name, zone);
+  const existing = await getHosts(fetchFn, config, zone);
+  const key = recordKey({ type: input.record.type, name: relativeName });
 
   const withoutMatching = existing.filter((h) => recordKey(h) !== key);
 
   const next =
     input.action === "delete"
       ? withoutMatching
-      : [
-          ...withoutMatching,
-          { type: input.record.type, name: input.record.name, address: input.record.value, ttl: String(input.record.ttl ?? 300) },
-        ];
+      : [...withoutMatching, { type: input.record.type, name: relativeName, address: input.record.value, ttl: String(input.record.ttl ?? 300) }];
 
-  await setHosts(fetchFn, config, input.zone, next);
+  await setHosts(fetchFn, config, zone, next);
   return {};
 }

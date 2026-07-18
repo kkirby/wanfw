@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { PACKAGE_NAME, applyDnsRecord, getHosts, setHosts, NamecheapApiError, splitZone, type FetchFn, type NamecheapConfig } from "./index.js";
+import {
+  PACKAGE_NAME,
+  applyDnsRecord,
+  getHosts,
+  setHosts,
+  NamecheapApiError,
+  splitZone,
+  registrableZone,
+  type FetchFn,
+  type NamecheapConfig,
+} from "./index.js";
 
 const config: NamecheapConfig = { apiUser: "u", apiKey: "k", username: "u", clientIp: "1.2.3.4" };
 
@@ -41,6 +51,20 @@ describe("dns-namecheap plugin (§6.1, §9)", () => {
 
     it("keeps a hyphenated SLD together, splitting only at the last dot", () => {
       expect(splitZone("my-example.tld")).toEqual({ sld: "my-example", tld: "tld" });
+    });
+  });
+
+  describe("registrableZone", () => {
+    it("leaves a plain two-label domain unchanged", () => {
+      expect(registrableZone("example.tld")).toBe("example.tld");
+    });
+
+    it("reduces a subdomain-based base domain to its last two labels -- 'home.example.com' is not itself registered, 'example.com' is", () => {
+      expect(registrableZone("home.example.com")).toBe("example.com");
+    });
+
+    it("reduces even deeper nesting the same way", () => {
+      expect(registrableZone("kavita.lab.home.example.com")).toBe("example.com");
     });
   });
 
@@ -139,6 +163,43 @@ describe("dns-namecheap plugin (§6.1, §9)", () => {
       await expect(
         applyDnsRecord(fetchFn, config, { zone: "example.tld", action: "set", record: { type: "TXT", name: "x", value: "y" } }),
       ).rejects.toThrow(/allowlist/i);
+    });
+
+    it("relativizes an absolute record name against the plain zone (cert-letsencrypt-dns01 always sends absolute names, e.g. '_acme-challenge.example.tld')", async () => {
+      const { fetchFn, calls } = fakeFetch([xmlWithHosts([]), xmlOk()]);
+      await applyDnsRecord(fetchFn, config, {
+        zone: "example.tld",
+        action: "set",
+        record: { type: "TXT", name: "_acme-challenge.example.tld", value: "token" },
+      });
+      expect(calls[1]).toContain(`HostName1=${encodeURIComponent("_acme-challenge")}`);
+      expect(calls[1]).not.toContain("example.tld");
+    });
+
+    it("regression: a base domain that's itself a subdomain (not the registered Namecheap domain) is reduced to the real registrable domain, and the record name keeps the full nested label chain -- exactly the real-world 'home.example.com' deployment pattern that used to fail with Namecheap's 'Domain name not found'", async () => {
+      const { fetchFn, calls } = fakeFetch([xmlWithHosts([]), xmlOk()]);
+      await applyDnsRecord(fetchFn, config, {
+        zone: "home.example.com", // the wanfw deployment's own base domain, not what's registered with Namecheap
+        action: "set",
+        record: { type: "TXT", name: "_acme-challenge.kavita.home.example.com", value: "token" },
+      });
+      // getHosts/setHosts must target the real registrable domain (SLD=example, TLD=com), not "home.example"/"com".
+      expect(calls[0]).toContain("SLD=example");
+      expect(calls[0]).toContain("TLD=com");
+      expect(calls[1]).toContain("SLD=example");
+      expect(calls[1]).toContain("TLD=com");
+      // and the Name sent to Namecheap must be relative to that registrable domain, preserving "kavita.home".
+      expect(calls[1]).toContain(`HostName1=${encodeURIComponent("_acme-challenge.kavita.home")}`);
+    });
+
+    it("relativizes an apex record (record name equal to the zone) to '@'", async () => {
+      const { fetchFn, calls } = fakeFetch([xmlWithHosts([]), xmlOk()]);
+      await applyDnsRecord(fetchFn, config, {
+        zone: "example.tld",
+        action: "set",
+        record: { type: "A", name: "example.tld", value: "1.2.3.4" },
+      });
+      expect(calls[1]).toContain("HostName1=%40");
     });
   });
 });

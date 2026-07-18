@@ -45,6 +45,29 @@ function splitZone(zone: string): { sld: string; tld: string } {
   return { sld: parts.slice(0, -1).join("."), tld: parts[parts.length - 1]! };
 }
 
+/**
+ * Namecheap's DNS API only ever operates at the registered SLD.TLD level --
+ * it has no concept of a delegated subdomain managed as its own zone. A
+ * `zone` with more than two labels (e.g. "home.example.com", a common
+ * "put the whole homelab under one subdomain of the domain I actually
+ * registered" pattern) has to be reduced to the last two labels
+ * ("example.com") before it's usable as an SLD/TLD pair -- passing the
+ * full value through `splitZone` unchanged instead produces a bogus SLD
+ * like "home.example" that Namecheap rejects with "Domain name not
+ * found", found live against a real deployment.
+ *
+ * This is a plain last-two-labels heuristic, not a public-suffix-list
+ * lookup, so it's wrong for compound TLDs (e.g. "example.co.uk" would
+ * incorrectly reduce to "co.uk") -- a known, documented limitation
+ * consistent with this client's own "minimal, not a general parser"
+ * scope (see module doc comment). A wrong guess fails loud, as a real
+ * Namecheap API error, rather than silently touching the wrong domain.
+ */
+export function registrableZone(zone: string): string {
+  const parts = zone.split(".");
+  return parts.length <= 2 ? zone : parts.slice(-2).join(".");
+}
+
 function extractErrors(xml: string): Array<{ number?: string; message: string }> {
   const errors: Array<{ number?: string; message: string }> = [];
   const errorBlockMatch = xml.match(/<Errors>([\s\S]*?)<\/Errors>/);
