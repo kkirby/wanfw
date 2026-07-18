@@ -154,14 +154,14 @@ export function buildHostApiDispatcher(deps: HostApiDispatcherDeps): (params: un
       return { generation };
     },
     "ipam.allocate": async (pluginId, args) => {
-      const { rangeId } = args as { rangeId: string };
+      const { rangeId, owner } = args as { rangeId: string; owner?: string };
       const types = await callingPluginTypes(pluginId);
       if (!types.includes("network-provider")) {
         throw new CapabilityError(`ipam.allocate denied: ${pluginId} is not a trusted network-provider plugin`);
       }
       try {
-        const ip = store.allocateIp(rangeId);
-        log.info("ipam address allocated", { component: "plugin", pluginId, rangeId, ip });
+        const ip = store.allocateIp(rangeId, owner);
+        log.info("ipam address allocated", { component: "plugin", pluginId, rangeId, owner, ip });
         return { ip };
       } catch (err) {
         if (err instanceof IpamExhaustedError) throw new CapabilityError(err.message);

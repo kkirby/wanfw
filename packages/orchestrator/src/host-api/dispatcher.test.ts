@@ -405,6 +405,27 @@ describe("buildHostApiDispatcher", () => {
       expect(store.listIpamAllocations("macvlan")).toHaveLength(0);
     });
 
+    it("ipam.allocate with an owner reuses the same address on repeat calls, instead of leaking a fresh one every reconcile", async () => {
+      const { dispatch, store, bundlesDir } = freshDispatcher();
+      trustAsType(store, bundlesDir, "network-macvlan", ["network-provider"]);
+      store.setIpamRange({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.241" });
+
+      const first = await dispatch({
+        invocationId: "i1",
+        pluginId: "network-macvlan",
+        method: "ipam.allocate",
+        args: { rangeId: "macvlan", owner: "shared-proxy" },
+      });
+      const second = await dispatch({
+        invocationId: "i2",
+        pluginId: "network-macvlan",
+        method: "ipam.allocate",
+        args: { rangeId: "macvlan", owner: "shared-proxy" },
+      });
+      expect(second).toEqual(first);
+      expect(store.listIpamAllocations("macvlan")).toHaveLength(1);
+    });
+
     it("denies ipam.allocate for a plugin that isn't a trusted network-provider type", async () => {
       const { dispatch, store, bundlesDir } = freshDispatcher();
       trustAsType(store, bundlesDir, "dns-namecheap", ["dns-provider"]);

@@ -61,7 +61,14 @@ rl.on("line", (line) => {
           gateway: string;
         };
         const result = await planTask(req, parent, reservedCidr, gateway, async () => {
-          const res = (await callHost("ipam.allocate", { rangeId: "macvlan" })) as { ip: string };
+          // `owner: req.purpose` makes this idempotent across repeated
+          // plans for the same logical resource (PLAN re-runs on every
+          // reconcile, ~every 60s) -- without it, every single call minted
+          // a brand-new address and never released the previous one,
+          // silently leaking the reserved range dry over time. `purpose`
+          // is exactly the stable identity `stableAddress: true` already
+          // promised but never actually implemented.
+          const res = (await callHost("ipam.allocate", { rangeId: "macvlan", owner: req.purpose })) as { ip: string };
           return res.ip;
         });
         process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
