@@ -80,6 +80,8 @@ Task handlers receive a `HostApiClient` (`packages/plugin-sdk/src/host-client.ts
 
 Do not attempt to import `dockerode`, `node:net` against the Docker socket, or anything else that reaches Docker directly -- the pluginhost container has no socket to reach (ADR-3); it will simply fail, by design, not as a bug to work around.
 
+**Debug logging**: call `host.call("log.emit", { level, msg, fields })` (or `HostApiClient.logEmit()` if you're using the plugin-sdk wrapper) at meaningful step transitions, not just on failure. It's always allowed -- no grant needed -- and lands directly in `docker logs wanfw-orchestrator` as a structured line (`{"component":"plugin","pluginId":...}`), visible in real time. A plugin that only reports its *final* result gives an operator nothing to work with when something fails deep inside a multi-step flow (an ACME order, a DNS provider round trip); log every host-API call you make and its outcome.
+
 ## 5. Build and packaging
 
 Built-ins are compiled at image-build time and copied into the pluginhost image's `builtins/` directory (see `deploy/pluginhost.Dockerfile`) -- no `npm install` happens inside the running container, ever. Third-party plugins are distributed as a `.tar` of a directory containing (at minimum) `manifest.json` and the compiled `entrypoint` file plus any compiled siblings it imports -- no `node_modules`. If your plugin needs a third-party npm dependency, bundle it (esbuild, or similar) into a single compiled file at your own build step; don't ship a `package.json` expecting the pluginhost to install anything.
@@ -97,6 +99,15 @@ wanfwctl plugin trust <id>@<sha256> --yes
 ```
 
 From that point, the plugin's grants live in `wanfw_state` (orchestrator-private, no shared volume) and every subsequent invocation is checked against exactly those grants. Untrusting (`wanfwctl plugin untrust <id> --yes`) makes any plan referencing it fail validation from then on. A tampered bundle -- one whose content no longer matches the hash it was trusted under -- is refused loudly at load time, not silently substituted.
+
+**Trust pins exact bytes, not "whatever's currently in the image."** Trusting a bundle (built-in or third-party) copies its content into `wanfw_bundles/<sha256>/`, and every invocation from then on runs that frozen copy, looked up by the plugin's *currently trusted* hash -- never the live pluginhost container's own files. This matters even for built-ins: rebuilding and restarting the orchestrator/pluginhost containers with new plugin code changes what's sitting in the image, but does **not** change what gets invoked, since the old hash is still what's trusted. After deploying any plugin code change (built-in or third-party), re-trust it:
+
+```sh
+wanfwctl plugin trust --builtin-all --yes   # built-ins: re-pulls current bytes from the pluginhost, upgrades in place
+wanfwctl plugin trust <id>@<new-sha256> --yes   # third-party: stage the new bundle first, then trust its new hash
+```
+
+`plugin trust` upserts by `(plugin_id, version)`, so re-trusting an already-trusted id with new content updates the trusted hash in place (shown as an `upgradeDiff` if the granted capabilities changed) -- it does not require untrusting first.
 
 ## 7. Testing your plugin
 

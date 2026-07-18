@@ -56,6 +56,23 @@ function callHost(method: string, args: unknown): Promise<unknown> {
   });
 }
 
+/**
+ * Real progress visibility through the ACME/DNS-01 flow -- found genuinely
+ * missing during a live debugging session, where the only signal an
+ * operator ever got was the final error (or nothing at all on success).
+ * `log.emit` already lands in the orchestrator's own structured log
+ * (`docker logs wanfw-orchestrator`), so this is visible in real time, not
+ * just after the fact. Best-effort: logging itself must never be what
+ * breaks a cert issuance.
+ */
+async function logStep(level: "info" | "warn" | "error", msg: string, fields?: Record<string, unknown>): Promise<void> {
+  try {
+    await callHost("log.emit", { level, msg, fields });
+  } catch {
+    // never let logging itself fail the actual task
+  }
+}
+
 // RFC 8555 doesn't mandate a User-Agent, and production Let's Encrypt
 // tolerates its absence (T4.4's live verification against it never
 // surfaced this) -- but Pebble (T4.7) enforces the ACME best-practice
@@ -102,16 +119,19 @@ const deps: CertEnsureDeps = {
     await callHost("secrets.put", { name, value });
   },
   dnsSetRecord: async (zone, record: DnsRecord) => {
+    await logStep("info", "setting DNS-01 challenge record", { zone, recordType: record.type, recordName: record.name });
     await callHost("dns.setRecord", { zone, record });
   },
   dnsDeleteRecord: async (zone, record: DnsRecord) => {
     await callHost("dns.deleteRecord", { zone, record });
+    await logStep("info", "cleaned up DNS-01 challenge record", { zone, recordType: record.type, recordName: record.name });
   },
   dnsQuery: async (name, type, result) => {
     await callHost("dns.query", { name, type, result });
   },
   certsStore: async (name, certPem, keyPem, meta) => {
     await callHost("certs.store", { name, certPem, keyPem, meta });
+    await logStep("info", "certificate stored", { name });
   },
   resolveTxt: async (name) => {
     try {
@@ -149,8 +169,16 @@ rl.on("line", (line) => {
         process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32601, message: `no such task: ${msg.method}` } })}\n`);
         return;
       }
-      const result = await certEnsure(deps, msg.params as CertEnsureInput);
-      process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+      const input = msg.params as CertEnsureInput;
+      await logStep("info", "cert.ensure starting", { certName: input.certName, zone: input.zone, names: input.names });
+      try {
+        const result = await certEnsure(deps, input);
+        await logStep("info", "cert.ensure succeeded", { certName: input.certName });
+        process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+      } catch (err) {
+        await logStep("error", "cert.ensure failed", { certName: input.certName, zone: input.zone, error: (err as Error).message });
+        throw err;
+      }
     } catch (err) {
       process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: (err as Error).message } })}\n`);
     }
