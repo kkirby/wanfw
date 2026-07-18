@@ -211,6 +211,49 @@ describe("RENEWAL stage (§9, T4.6)", () => {
     expect(invoked).toBe(false);
   });
 
+  it("self-heals stale failure bookkeeping once a matching cert exists but isn't due -- regression: an out-of-band success (e.g. a manual `wanfwctl plugin invoke cert.ensure` while debugging) used to leave 'N failed attempt(s)' displayed forever, since this stage never got the chance to record its own success", async () => {
+    const rolesHolder: FrameworkRolesHolder = { roles: { certIssuer: "cert-letsencrypt-dns01" } };
+    const store = fakeStore({ storedAt: "2026-07-18T20:16:20Z", names: ["kavita.example.tld"] }); // freshly (re)issued out-of-band
+    const renewalStates = fakeRenewalStateStore();
+    renewalStates.write("wildcard", {
+      lastAttemptAt: "2026-07-18T19:04:48Z",
+      consecutiveFailures: 2,
+      lastError: { code: "invoke_error", message: "dns-provider 'dns-namecheap' rejected the DNS change: Namecheap API error: Domain name not found" },
+    });
+    let invoked = false;
+    const stage = buildRenewalStage({
+      invokePlugin: async () => {
+        invoked = true;
+        return { ok: true, result: {} };
+      },
+      rolesHolder,
+      readRenewalState: renewalStates.read,
+      writeRenewalState: renewalStates.write,
+      readCertMeta: store.readCertMeta,
+      now: () => new Date("2026-07-18T20:30:00Z"),
+    });
+    const result = await stage.run({ planGraph: planGraph(["kavita.example.tld"]) });
+    expect(result.ok).toBe(true);
+    expect(invoked).toBe(false); // not due -- the stage must not re-attempt just to clear stale state
+    expect(renewalStates.read("wildcard")).toEqual({ lastSuccessAt: "2026-07-18T20:16:20Z", consecutiveFailures: 0 });
+  });
+
+  it("leaves failure bookkeeping alone when the cert genuinely isn't due yet and nothing has failed", async () => {
+    const rolesHolder: FrameworkRolesHolder = { roles: { certIssuer: "cert-letsencrypt-dns01" } };
+    const store = fakeStore({ storedAt: "2026-07-01T00:00:00Z", names: ["kavita.example.tld"] });
+    const renewalStates = fakeRenewalStateStore();
+    const stage = buildRenewalStage({
+      invokePlugin: async () => ({ ok: true, result: {} }),
+      rolesHolder,
+      readRenewalState: renewalStates.read,
+      writeRenewalState: renewalStates.write,
+      readCertMeta: store.readCertMeta,
+      now: () => new Date("2026-07-12T00:00:00Z"),
+    });
+    await stage.run({ planGraph: planGraph(["kavita.example.tld"]) });
+    expect(renewalStates.states.has("wildcard")).toBe(false); // never written -- nothing to self-heal
+  });
+
   it("flags ctx.degraded when the served cert has fewer than 7 days remaining, independent of due-ness", async () => {
     const rolesHolder: FrameworkRolesHolder = { roles: {} }; // no issuer bound at all
     const store = fakeStore({ storedAt: "2026-04-16T00:00:00Z", names: ["kavita.example.tld"] }); // 87 days old, 3 remaining
