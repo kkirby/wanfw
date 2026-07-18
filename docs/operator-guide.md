@@ -45,7 +45,10 @@ wanfwctl init
 It will ask for, in order:
 
 1. **Domain** (e.g. `example.tld`) and **ACME account email**.
-2. **Namecheap DNS credentials** (API user, username, API key) -- stored via the secrets store, never logged, never written to the desired-state files tier1 can read.
+2. **Namecheap DNS credentials** -- stored via the secrets store, never logged, never written to the desired-state files tier1 can read:
+   - **API user**: the Namecheap account enabled for API access (Namecheap: Profile > Tools > API Access).
+   - **Username**: the account that owns/manages the domain -- almost always the same value as API user (only differs for reseller/sub-account setups; if unsure, enter it again).
+   - **API key**.
 3. **Network provider**: bridge (default -- publishes 443/80 directly on the host) or macvlan (a dedicated LAN IP for the proxy; see §5 before choosing this).
 4. Nothing else -- it then batch-trusts the production plugin builtins, writes the framework document, and waits (up to 30s) for the first reconcile to bring the proxy up.
 

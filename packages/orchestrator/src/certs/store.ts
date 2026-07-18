@@ -30,6 +30,8 @@ export interface CertListEntry {
   currentGeneration: number;
   generations: number[];
   meta?: CertMeta;
+  /** Renewal attempt/backoff bookkeeping (T4.6) -- when it last ran, whether it's currently failing, and why. `readRenewalState`'s own zero-state default (`{consecutiveFailures: 0}`, no timestamps) when no attempt has ever been recorded. */
+  renewal: RenewalState;
 }
 
 function nameDir(certsDir: string, name: string): string {
@@ -52,6 +54,8 @@ export interface RenewalState {
   lastAttemptAt?: string;
   lastSuccessAt?: string;
   consecutiveFailures: number;
+  /** The real error from the most recent failed renewal attempt (T4.6's RENEWAL stage), so an operator can see *why* it's retrying, not just that it is. */
+  lastError?: { code: string; message: string };
 }
 
 /** Renewal attempt/backoff bookkeeping (T4.6), sibling to the generation dirs -- survives orchestrator restarts, atomic write like the `current` pointer. Returns a fresh zero-state if this cert has never had a renewal attempt recorded. */
@@ -170,7 +174,13 @@ export function listCerts(certsDir: string): CertListEntry[] {
     .map((name) => {
       const generations = listGenerations(certsDir, name);
       const currentGeneration = readCurrentGeneration(certsDir, name) ?? generations.at(-1) ?? 0;
-      return { name, currentGeneration, generations, meta: readMeta(certsDir, name, currentGeneration) };
+      return {
+        name,
+        currentGeneration,
+        generations,
+        meta: readMeta(certsDir, name, currentGeneration),
+        renewal: readRenewalState(certsDir, name),
+      };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 }

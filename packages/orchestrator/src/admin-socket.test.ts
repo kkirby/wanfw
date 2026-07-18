@@ -139,6 +139,46 @@ describe("admin socket: /framework (T5.3, docs/t5.3-decisions.md)", () => {
     expect((res.body as { error: string }).error).toBe("usage");
   });
 
+  it("POST /framework accepts a VLAN sub-interface (e.g. 'eth0.50') as a valid macvlan parent/lanInterface", async () => {
+    const { socketPath, store } = await boot();
+    const vlanFramework = {
+      ...validFramework,
+      spec: {
+        ...validFramework.spec,
+        roles: { networkProvider: "network-macvlan", proxyEngine: "proxy-caddy" },
+        network: {
+          lanInterface: "eth0.50",
+          macvlan: { parent: "eth0.50", reservedCidr: "192.168.1.240/29", gateway: "192.168.1.1" },
+        },
+      },
+    };
+    const res = await requestOverSocket(socketPath, "POST", "/framework", vlanFramework);
+    expect(res.status).toBe(200);
+    expect(store.getFrameworkDoc()).toEqual(vlanFramework);
+  });
+
+  it("POST /framework rejects a malformed reservedCidr/gateway/parent before ever storing it", async () => {
+    const { socketPath, store } = await boot();
+    const base = {
+      ...validFramework,
+      spec: {
+        ...validFramework.spec,
+        roles: { networkProvider: "network-macvlan", proxyEngine: "proxy-caddy" },
+      },
+    };
+
+    const badCidr = { ...base, spec: { ...base.spec, network: { lanInterface: "eth0", macvlan: { parent: "eth0", reservedCidr: "not-a-cidr", gateway: "192.168.1.1" } } } };
+    expect((await requestOverSocket(socketPath, "POST", "/framework", badCidr)).status).toBe(400);
+
+    const badGateway = { ...base, spec: { ...base.spec, network: { lanInterface: "eth0", macvlan: { parent: "eth0", reservedCidr: "192.168.1.240/29", gateway: "999.999.999.999" } } } };
+    expect((await requestOverSocket(socketPath, "POST", "/framework", badGateway)).status).toBe(400);
+
+    const badParent = { ...base, spec: { ...base.spec, network: { lanInterface: "eth0", macvlan: { parent: "not an interface!", reservedCidr: "192.168.1.240/29", gateway: "192.168.1.1" } } } };
+    expect((await requestOverSocket(socketPath, "POST", "/framework", badParent)).status).toBe(400);
+
+    expect(store.getFrameworkDoc()).toBeUndefined();
+  });
+
   it("a second POST /framework overwrites the first", async () => {
     const { socketPath, store } = await boot();
     await requestOverSocket(socketPath, "POST", "/framework", validFramework);
@@ -328,5 +368,56 @@ describe("admin socket: /plugins/trust-builtins ids filter (T5.3)", () => {
     const checks = (res.body as { checks: Array<{ name: string; status: string }> }).checks;
     expect(checks.find((c) => c.name === "wan-ip-detect")?.status).toBe("pass");
     expect(checks.find((c) => c.name === "framework-doc")?.status).toBe("pass");
+  });
+
+  it("POST /network/probe-macvlan forwards to the injected probeNetwork and returns its real result -- the wizard's pre-flight check (T5.3)", async () => {
+    const heartbeat: HeartbeatState = { current: { phase: "pending-init", ts: "x", version: "0.1.0" } };
+    const dbDir = await mkdtemp(join(tmpdir(), "wanfw-admin-probe-"));
+    dirs.push(dbDir);
+    const store = new StateStore(join(dbDir, "state.sqlite3"));
+    stores.push(store);
+    const keyDir = await mkdtemp(join(tmpdir(), "wanfw-admin-probe-key-"));
+    dirs.push(keyDir);
+    const signingKeyHolder = { manager: await SigningKeyManager.loadOrCreate(join(keyDir, "signing.key")), keyPath: join(keyDir, "signing.key") };
+    const auditDir = await mkdtemp(join(tmpdir(), "wanfw-admin-probe-audit-"));
+    dirs.push(auditDir);
+    const auditLog = new AuditLog(join(auditDir, "audit.jsonl"), () => signingKeyHolder.manager);
+    const stagingDir = await mkdtemp(join(tmpdir(), "wanfw-admin-probe-staging-"));
+    dirs.push(stagingDir);
+    const socketDir = await mkdtemp(join(tmpdir(), "wanfw-admin-probe-sock-"));
+    dirs.push(socketDir);
+
+    let calledWith: string | undefined;
+    const router = buildAdminSocketRouter({
+      heartbeat,
+      signingKeyHolder,
+      store,
+      auditLog,
+      pluginConnectionHolder: {},
+      stagingDir,
+      bundlesDir: stagingDir,
+      statusDir: stagingDir,
+      secretsDir: stagingDir,
+      certsDir: stagingDir,
+      gateSnapshotHolder: { services: new Map() },
+      probeNetwork: async (mode, parent) => {
+        calledWith = parent;
+        return mode === "macvlan" && parent === "eth0.50" ? { ok: true } : { ok: false, reason: "no promiscuous mode" };
+      },
+    });
+    const socketPath = join(socketDir, "admin.sock");
+    servers.push(listenOnUnixSocket(router, socketPath, 0o600));
+    await new Promise((r) => setTimeout(r, 50));
+
+    const passRes = await requestOverSocket(socketPath, "POST", "/network/probe-macvlan", { parent: "eth0.50" });
+    expect(passRes.status).toBe(200);
+    expect(passRes.body).toEqual({ ok: true });
+    expect(calledWith).toBe("eth0.50");
+
+    const failRes = await requestOverSocket(socketPath, "POST", "/network/probe-macvlan", { parent: "eth0" });
+    expect(failRes.body).toEqual({ ok: false, reason: "no promiscuous mode" });
+
+    const usageRes = await requestOverSocket(socketPath, "POST", "/network/probe-macvlan", {});
+    expect(usageRes.status).toBe(400);
   });
 });

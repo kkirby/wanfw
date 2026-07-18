@@ -90,6 +90,68 @@ describe("invokeTrustedPlugin", () => {
     expect(entries.some((e) => e.type === "plugin.invoke")).toBe(true);
   });
 
+  it("includes the invocation's error in the plugin.invoke audit entry on failure", async () => {
+    const { deps, holder } = await makeDeps();
+    deps.store.insertTrustRecord({
+      plugin_id: "echo-test-fixture",
+      version: "0.1.0",
+      sha256: "fixturehash",
+      granted_caps_json: "[]",
+      sig: "sig",
+      created_at: new Date().toISOString(),
+    });
+
+    holder.connection = {
+      call: async (_method: string, params: unknown) => ({
+        invocationId: (params as { invocationId: string }).invocationId,
+        ok: false,
+        error: { code: "nonzero_exit", message: "child exited with code 1: simulated crash" },
+      }),
+    } as never;
+
+    const result = await invokeTrustedPlugin(deps, "echo-test-fixture", "cert.ensure", {}, {
+      wallMs: 1000,
+      memMb: 256,
+      cpuSeconds: 5,
+    });
+
+    expect(result.ok).toBe(false);
+
+    const entries = deps.auditLog.readAll();
+    const entry = entries.find((e) => e.type === "plugin.invoke");
+    expect(entry).toBeDefined();
+    expect(entry!.details).toMatchObject({
+      ok: false,
+      error: { code: "nonzero_exit", message: "child exited with code 1: simulated crash" },
+    });
+  });
+
+  it("omits the error field from the audit entry on success", async () => {
+    const { deps, holder } = await makeDeps();
+    deps.store.insertTrustRecord({
+      plugin_id: "echo-test-fixture",
+      version: "0.1.0",
+      sha256: "fixturehash",
+      granted_caps_json: "[]",
+      sig: "sig",
+      created_at: new Date().toISOString(),
+    });
+
+    holder.connection = {
+      call: async (_method: string, params: unknown) => ({
+        invocationId: (params as { invocationId: string }).invocationId,
+        ok: true,
+        result: {},
+      }),
+    } as never;
+
+    await invokeTrustedPlugin(deps, "echo-test-fixture", "echo", {}, { wallMs: 1000, memMb: 256, cpuSeconds: 5 });
+
+    const entries = deps.auditLog.readAll();
+    const entry = entries.find((e) => e.type === "plugin.invoke");
+    expect(entry!.details.error).toBeUndefined();
+  });
+
   it("audits plugin.invoke.refused when the connection rejects with a hash mismatch", async () => {
     const { deps, holder } = await makeDeps();
     deps.store.insertTrustRecord({

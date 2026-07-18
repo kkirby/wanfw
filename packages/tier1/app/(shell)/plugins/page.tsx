@@ -1,4 +1,5 @@
-import { Alert, Badge, Card, Code, Group, Stack, Table, TableTbody, TableTd, TableTh, TableThead, TableTr, Text, Title } from "@mantine/core";
+import { Alert, Badge, Button, Card, Code, Group, Stack, Table, TableTbody, TableTd, TableTh, TableThead, TableTr, Text, Title } from "@mantine/core";
+import Link from "next/link";
 import { listPendingPlugins, listTrustedPlugins } from "../../../lib/orch";
 import { UploadForm } from "./upload-form";
 
@@ -40,6 +41,7 @@ export default async function PluginsPage() {
                 <TableTh>Version</TableTh>
                 <TableTh>Hash</TableTh>
                 <TableTh>Granted capabilities</TableTh>
+                <TableTh />
               </TableTr>
             </TableThead>
             <TableTbody>
@@ -60,6 +62,11 @@ export default async function PluginsPage() {
                           </Badge>
                         ))}
                       </Group>
+                    </TableTd>
+                    <TableTd>
+                      <Button component={Link} href={`/plugins/${encodeURIComponent(t.plugin_id)}`} variant="light" size="xs">
+                        Details
+                      </Button>
                     </TableTd>
                   </TableTr>
                 );

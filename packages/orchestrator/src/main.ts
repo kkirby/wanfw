@@ -126,7 +126,15 @@ const reconcileEngine = new ReconcileEngine({
       certsVolumeName: paths.certsVolumeName,
       proxycfgVolumeName: paths.proxycfgVolumeName,
     }),
-    buildObserveStage({ store: stateStore, docker: dockerClient, statusDir: paths.statusDir }),
+    buildObserveStage({
+      store: stateStore,
+      docker: dockerClient,
+      statusDir: paths.statusDir,
+      readCertMeta: (name) => {
+        const entry = listCerts(paths.certsDir).find((c) => c.name === name);
+        return entry?.meta ? { storedAt: entry.meta.storedAt, names: entry.meta.names } : undefined;
+      },
+    }),
   ],
   log,
   onOutcome: (outcome) => {
@@ -158,6 +166,11 @@ const statusServer: Server = listenOnUnixSocket(
     secretsDir: paths.secretsDir,
     certsDir: paths.certsDir,
     gateSnapshotHolder,
+    auditLog,
+    pluginConnectionHolder,
+    docker: dockerClient,
+    dockerSocketPath: paths.dockerSocketPath ?? "/var/run/docker.sock",
+    probeNetwork: (mode, parent) => dockerClient.probeMacvlan(parent),
     onNudge: () => void reconcileEngine.trigger("nudge"),
   }),
   paths.statusSocketPath,

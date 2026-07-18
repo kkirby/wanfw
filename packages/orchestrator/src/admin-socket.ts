@@ -228,6 +228,21 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
     return { status: 200, body: { checks } };
   });
 
+  // T5.3 wizard pre-flight (mutation-free despite being POST, same shape as
+  // status-socket's /validate): lets `wanfwctl init` check a candidate
+  // macvlan parent interface actually works *before* writing the framework
+  // document, using the same real Docker-daemon throwaway-network probe
+  // `/doctor`'s macvlan-probe check already relies on. Without this, a wrong
+  // interface was only ever discovered after the fact, manually, via a
+  // separate `wanfwctl doctor` run.
+  router.register("POST", "/network/probe-macvlan", async ({ body }) => {
+    const { parent } = (body ?? {}) as { parent?: string };
+    if (!parent) return { status: 400, body: { error: "usage", message: "body must include 'parent'" } };
+    if (!deps.probeNetwork) return { status: 200, body: { ok: true, reason: "probe unavailable in this environment -- skipped" } };
+    const result = await deps.probeNetwork("macvlan", parent);
+    return { status: 200, body: result };
+  });
+
   router.register("POST", "/plugins/untrust", async ({ body }) => {
     const { id } = (body ?? {}) as { id?: string };
     if (!id) {

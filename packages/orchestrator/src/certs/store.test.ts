@@ -101,6 +101,30 @@ describe("certs store (§6.6, §9, T4.5)", () => {
     expect(entries[0]!.meta?.names).toEqual(["example.tld", "*.example.tld"]);
   });
 
+  it("listCerts reports a zero-state renewal default when no renewal attempt has ever been recorded", () => {
+    const dir = freshDir();
+    storeCert(dir, "wildcard", "CERT1", "KEY1", {});
+    const entry = listCerts(dir).find((e) => e.name === "wildcard")!;
+    expect(entry.renewal).toEqual({ consecutiveFailures: 0 });
+  });
+
+  it("listCerts surfaces a recorded renewal failure's error and retry count", () => {
+    const dir = freshDir();
+    storeCert(dir, "wildcard", "CERT1", "KEY1", {});
+    writeRenewalState(dir, "wildcard", {
+      consecutiveFailures: 2,
+      lastAttemptAt: "2026-07-12T00:00:00.000Z",
+      lastError: { code: "acme_error", message: "rate limited" },
+    });
+
+    const entry = listCerts(dir).find((e) => e.name === "wildcard")!;
+    expect(entry.renewal).toEqual({
+      consecutiveFailures: 2,
+      lastAttemptAt: "2026-07-12T00:00:00.000Z",
+      lastError: { code: "acme_error", message: "rate limited" },
+    });
+  });
+
   it("listCerts on an empty/nonexistent store returns an empty array", () => {
     const dir = freshDir();
     expect(listCerts(join(dir, "nonexistent"))).toEqual([]);

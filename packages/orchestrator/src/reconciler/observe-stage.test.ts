@@ -143,6 +143,109 @@ describe("OBSERVE stage (T3.9)", () => {
     expect(doc.certNotAfter).toBeNull();
   });
 
+  it("projects certNotAfter from the wildcard cert's storedAt + 90 days when the service's hostname is covered", async () => {
+    const store = await makeStore();
+    const statusDir = await makeStatusDir();
+    const docker = new FakeDockerClient();
+    await ensureContainer(docker, "wanfw_kavita", { image: "kavita/kavita:latest" }, { service: "kavita", plan: "p0" });
+
+    const services = new Map([["kavita", serviceDoc("kavita")]]);
+    const desiredState: DesiredState = { framework: frameworkDoc(), services, pluginConfigs: new Map(), errors: [] };
+    const stage = buildObserveStage({
+      store,
+      docker,
+      statusDir,
+      readCertMeta: () => ({ storedAt: "2026-04-01T00:00:00.000Z", names: ["kavita.example.tld"] }),
+    });
+    await stage.run({ desiredState } as unknown as ReconcileRunContext);
+
+    const raw = await readFile(join(statusDir, "services", "kavita.json"), "utf8");
+    const doc = JSON.parse(raw);
+    // 2026-04-01 + 90 days
+    expect(doc.certNotAfter).toBe("2026-06-30T00:00:00.000Z");
+  });
+
+  it("does not project certNotAfter for a service whose hostname the current cert doesn't cover", async () => {
+    const store = await makeStore();
+    const statusDir = await makeStatusDir();
+    const docker = new FakeDockerClient();
+    await ensureContainer(docker, "wanfw_kavita", { image: "kavita/kavita:latest" }, { service: "kavita", plan: "p0" });
+
+    const services = new Map([["kavita", serviceDoc("kavita")]]);
+    const desiredState: DesiredState = { framework: frameworkDoc(), services, pluginConfigs: new Map(), errors: [] };
+    const stage = buildObserveStage({
+      store,
+      docker,
+      statusDir,
+      readCertMeta: () => ({ storedAt: "2026-04-01T00:00:00.000Z", names: ["other.example.tld"] }),
+    });
+    await stage.run({ desiredState } as unknown as ReconcileRunContext);
+
+    const raw = await readFile(join(statusDir, "services", "kavita.json"), "utf8");
+    expect(JSON.parse(raw).certNotAfter).toBeNull();
+  });
+
+  it("propagates a framework-wide renewal degradedReason as this service's own lastError when its hostname is covered", async () => {
+    const store = await makeStore();
+    const statusDir = await makeStatusDir();
+    const docker = new FakeDockerClient();
+    await ensureContainer(docker, "wanfw_kavita", { image: "kavita/kavita:latest" }, { service: "kavita", plan: "p0" });
+
+    const services = new Map([["kavita", serviceDoc("kavita")]]);
+    const desiredState: DesiredState = { framework: frameworkDoc(), services, pluginConfigs: new Map(), errors: [] };
+    const stage = buildObserveStage({ store, docker, statusDir });
+    const ctx = {
+      desiredState,
+      planGraph: { servicePlans: {}, routes: [], certRequirements: { mode: "internal-ca", names: ["kavita.example.tld"] } },
+      degradedReason: { stage: "renewal", message: "cert 'wildcard' has fewer than 7 days remaining; last renewal attempt failed: rate limited" },
+    } as unknown as ReconcileRunContext;
+    await stage.run(ctx);
+
+    const raw = await readFile(join(statusDir, "services", "kavita.json"), "utf8");
+    const doc = JSON.parse(raw);
+    expect(doc.lastError?.message).toContain("rate limited");
+  });
+
+  it("does not propagate a renewal degradedReason to a service whose hostname isn't among the required names", async () => {
+    const store = await makeStore();
+    const statusDir = await makeStatusDir();
+    const docker = new FakeDockerClient();
+    await ensureContainer(docker, "wanfw_kavita", { image: "kavita/kavita:latest" }, { service: "kavita", plan: "p0" });
+
+    const services = new Map([["kavita", serviceDoc("kavita")]]);
+    const desiredState: DesiredState = { framework: frameworkDoc(), services, pluginConfigs: new Map(), errors: [] };
+    const stage = buildObserveStage({ store, docker, statusDir });
+    const ctx = {
+      desiredState,
+      planGraph: { servicePlans: {}, routes: [], certRequirements: { mode: "internal-ca", names: ["other.example.tld"] } },
+      degradedReason: { stage: "renewal", message: "cert 'wildcard' has fewer than 7 days remaining" },
+    } as unknown as ReconcileRunContext;
+    await stage.run(ctx);
+
+    const raw = await readFile(join(statusDir, "services", "kavita.json"), "utf8");
+    expect(JSON.parse(raw).lastError).toBeUndefined();
+  });
+
+  it("does not propagate a degradedReason from a non-renewal stage as a service's lastError", async () => {
+    const store = await makeStore();
+    const statusDir = await makeStatusDir();
+    const docker = new FakeDockerClient();
+    await ensureContainer(docker, "wanfw_kavita", { image: "kavita/kavita:latest" }, { service: "kavita", plan: "p0" });
+
+    const services = new Map([["kavita", serviceDoc("kavita")]]);
+    const desiredState: DesiredState = { framework: frameworkDoc(), services, pluginConfigs: new Map(), errors: [] };
+    const stage = buildObserveStage({ store, docker, statusDir });
+    const ctx = {
+      desiredState,
+      planGraph: { servicePlans: {}, routes: [], certRequirements: { mode: "internal-ca", names: ["kavita.example.tld"] } },
+      degradedReason: { stage: "plan", plugin: "network-macvlan", message: "unrelated plan-stage problem" },
+    } as unknown as ReconcileRunContext;
+    await stage.run(ctx);
+
+    const raw = await readFile(join(statusDir, "services", "kavita.json"), "utf8");
+    expect(JSON.parse(raw).lastError).toBeUndefined();
+  });
+
   it("a service parked pending approval gets phase 'pending-approval' in its status doc", async () => {
     const store = await makeStore();
     const statusDir = await makeStatusDir();

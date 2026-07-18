@@ -154,6 +154,87 @@ export async function listSecrets(): Promise<SecretListEntry[]> {
   return ((res.body as { secrets: SecretListEntry[] } | undefined)?.secrets) ?? [];
 }
 
+export interface CertMeta {
+  names: string[];
+  storedAt: string;
+  [key: string]: unknown;
+}
+
+export interface RenewalState {
+  lastAttemptAt?: string;
+  lastSuccessAt?: string;
+  consecutiveFailures: number;
+  lastError?: { code: string; message: string };
+}
+
+export interface CertListEntry {
+  name: string;
+  currentGeneration: number;
+  generations: number[];
+  meta?: CertMeta;
+  renewal: RenewalState;
+}
+
+/** Stored cert generations + renewal bookkeeping (§6.6, §9, T4.5/T4.6) -- rollback is CLI-only (ADR-6), same no-mutation-button pattern as approvals/secrets. */
+export async function listCerts(): Promise<CertListEntry[]> {
+  const res = await orchRequest("GET", "/certs");
+  return ((res.body as { certs: CertListEntry[] } | undefined)?.certs) ?? [];
+}
+
+export interface FrameworkDoc {
+  domain: string;
+  deploymentMode: "subdomain" | "port";
+  acmeEmail: string;
+  roles: {
+    networkProvider: string;
+    proxyEngine: string;
+    certIssuer?: string;
+    dnsProvider?: string;
+  };
+  strictApprovals?: "powerful" | "all";
+  network?: {
+    lanInterface: string;
+    macvlan?: { parent: string; reservedCidr: string; gateway: string };
+  };
+}
+
+/** Read-only mirror of the framework document `wanfwctl init`/the setup wizard writes (§5.3) -- tier1 has no path to admin.sock and must never be able to author it, only display it. */
+export async function getFramework(): Promise<FrameworkDoc | undefined> {
+  const res = await orchRequest("GET", "/framework");
+  const framework = (res.body as { framework: FrameworkDoc | null } | undefined)?.framework;
+  return framework ?? undefined;
+}
+
+export interface AuditEntry {
+  seq: number;
+  ts: string;
+  type: string;
+  details: Record<string, unknown>;
+  prevHash: string;
+  hash: string;
+  checkpointSig?: string;
+}
+
+/** Read-only mirror of the admin socket's own /audit (entries only -- chain verification stays admin.sock/wanfwctl-only). Never carries secret values, same as every other read this module exposes. */
+export async function listAuditEntries(): Promise<AuditEntry[]> {
+  const res = await orchRequest("GET", "/audit");
+  return ((res.body as { entries: AuditEntry[] } | undefined)?.entries) ?? [];
+}
+
+export type DoctorStatus = "pass" | "fail" | "warn" | "info" | "skip";
+
+export interface DoctorCheck {
+  name: string;
+  status: DoctorStatus;
+  message: string;
+}
+
+/** Read-only mirror of the admin socket's own /doctor (T5.4) -- same checks `wanfwctl doctor` runs (Docker socket, proxy container, macvlan probe, WAN IP/DNS match, DNS provider credentials), pure reads/probes with no mutation, so a web operator gets these without needing shell access. */
+export async function runDoctorChecks(): Promise<DoctorCheck[]> {
+  const res = await orchRequest("GET", "/doctor");
+  return ((res.body as { checks: DoctorCheck[] } | undefined)?.checks) ?? [];
+}
+
 export interface OperatorInfo {
   domain: string;
   wanIp: string | null;

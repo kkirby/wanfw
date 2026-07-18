@@ -124,6 +124,34 @@ describe("RENEWAL stage (§9, T4.6)", () => {
     expect(renewalStates.read("wildcard").consecutiveFailures).toBe(1);
     expect(renewalStates.read("wildcard").lastAttemptAt).toBe("2026-07-12T00:00:00.000Z");
     expect(renewalStates.read("wildcard").lastSuccessAt).toBeUndefined();
+    expect(renewalStates.read("wildcard").lastError).toEqual({ code: "acme_error", message: "rate limited" });
+  });
+
+  it("folds a previously recorded renewal failure's real error into ctx.degradedReason when escalated", async () => {
+    const rolesHolder: FrameworkRolesHolder = { roles: {} }; // no issuer bound, so this run won't overwrite lastError
+    const store = fakeStore({ storedAt: "2026-04-16T00:00:00Z", names: ["kavita.example.tld"] }); // 87 days old, 3 remaining
+    const renewalStates = fakeRenewalStateStore();
+    renewalStates.write("wildcard", {
+      consecutiveFailures: 3,
+      lastAttemptAt: "2026-07-11T00:00:00Z",
+      lastError: { code: "acme_error", message: "ACME rate limited, retry after 2026-07-13T00:00:00Z" },
+    });
+    const stage = buildRenewalStage({
+      invokePlugin: async () => ({ ok: true, result: {} }),
+      rolesHolder,
+      readRenewalState: renewalStates.read,
+      writeRenewalState: renewalStates.write,
+      readCertMeta: store.readCertMeta,
+      now: () => new Date("2026-07-12T00:00:00Z"),
+    });
+    const ctx: ReconcileRunContext = { planGraph: planGraph(["kavita.example.tld"]) };
+    await stage.run(ctx);
+
+    expect(ctx.degraded).toBe(true);
+    expect(ctx.degradedReason).toMatchObject({ stage: "renewal" });
+    expect((ctx.degradedReason as { message: string }).message).toContain(
+      "ACME rate limited, retry after 2026-07-13T00:00:00Z",
+    );
   });
 
   it("does not invoke the issuer when the currently stored cert is not yet due for renewal", async () => {

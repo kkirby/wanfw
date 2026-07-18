@@ -25,11 +25,20 @@ describe("runInit (T5.3 wizard)", () => {
     return async () => answers[i++] ?? "";
   }
 
-  async function bootFakeAdmin(overrides?: { existingFramework?: unknown; wanIp?: string | null; statusOk?: string }) {
+  async function bootFakeAdmin(overrides?: {
+    existingFramework?: unknown;
+    wanIp?: string | null;
+    statusOk?: string;
+    probeMacvlan?: { ok: boolean; reason?: string };
+  }) {
     const router = new JsonUdsRouter();
     const calls: Array<{ method: string; path: string; body?: unknown }> = [];
 
     router.register("GET", "/framework", async () => ({ status: 200, body: { framework: overrides?.existingFramework ?? null } }));
+    router.register("POST", "/network/probe-macvlan", async ({ body }) => {
+      calls.push({ method: "POST", path: "/network/probe-macvlan", body });
+      return { status: 200, body: overrides?.probeMacvlan ?? { ok: true } };
+    });
     router.register("POST", "/plugins/trust-builtins", async ({ body }) => {
       calls.push({ method: "POST", path: "/plugins/trust-builtins", body });
       return { status: 200, body: { trusted: [] } };
@@ -113,6 +122,8 @@ describe("runInit (T5.3 wizard)", () => {
     expect(new Date(tokenFile.createdAt).getTime()).toBeGreaterThan(0);
 
     expect(out.lines.some((l) => l.includes("setup token"))).toBe(true);
+    expect(out.lines.some((l) => l.includes("API User: the Namecheap account enabled for API access"))).toBe(true);
+    expect(out.lines.some((l) => l.includes("almost always the same value as"))).toBe(true);
 
     const operatorInfoCall = calls.find((c) => c.path === "/operator-info");
     const operatorInfo = operatorInfoCall!.body as { domain: string; wanIp: string; networkProvider: string; instructions: string[] };
@@ -123,7 +134,7 @@ describe("runInit (T5.3 wizard)", () => {
     expect(operatorInfo.instructions[0]).toContain("example.tld");
   });
 
-  it("macvlan provider: prompts for parent/CIDR/gateway and includes them in the framework doc", async () => {
+  it("macvlan provider (non-VLAN LAN): prompts for parent/CIDR/gateway and includes them in the framework doc", async () => {
     const { socketPath, statusDir, calls } = await bootFakeAdmin();
     const out = captureOutput();
     const prompt = scriptedPrompt([
@@ -133,6 +144,7 @@ describe("runInit (T5.3 wizard)", () => {
       "myusername",
       "mykey",
       "y", // use macvlan? yes
+      "n", // is your LAN VLAN-segmented? no
       "eth0", // parent
       "192.168.1.240/29", // reservedCidr
       "192.168.1.1", // gateway
@@ -150,7 +162,91 @@ describe("runInit (T5.3 wizard)", () => {
     });
   });
 
-  it("aborts cleanly when a framework doc already exists and the operator declines to overwrite", async () => {
+  it("macvlan provider (VLAN-segmented LAN): composes parent from base interface + VLAN ID rather than requiring the operator to hand-construct it", async () => {
+    const { socketPath, statusDir, calls } = await bootFakeAdmin();
+    const out = captureOutput();
+    const prompt = scriptedPrompt([
+      "example.tld",
+      "ops@example.tld",
+      "myuser",
+      "myusername",
+      "mykey",
+      "y", // use macvlan? yes
+      "y", // is your LAN VLAN-segmented? yes
+      "eth0", // base interface
+      "50", // VLAN ID
+      "192.168.1.240/29", // reservedCidr
+      "192.168.1.1", // gateway
+    ]);
+
+    const code = await runInit({ adminSocketPath: socketPath, stdout: out.stdout, stderr: out.stderr, prompt, statusDir, sleep: async () => {} });
+    expect(code).toBe(0);
+
+    const frameworkCall = calls.find((c) => c.path === "/framework");
+    const spec = (frameworkCall!.body as { spec: Record<string, unknown> }).spec;
+    expect(spec.network).toEqual({
+      lanInterface: "eth0.50",
+      macvlan: { parent: "eth0.50", reservedCidr: "192.168.1.240/29", gateway: "192.168.1.1" },
+    });
+  });
+
+  it("aborts before writing the framework doc when the live macvlan probe fails", async () => {
+    const { socketPath, statusDir, calls } = await bootFakeAdmin({ probeMacvlan: { ok: false, reason: "no promiscuous mode on 'eth0.50'" } });
+    const out = captureOutput();
+    const prompt = scriptedPrompt([
+      "example.tld",
+      "ops@example.tld",
+      "myuser",
+      "myusername",
+      "mykey",
+      "y", // use macvlan? yes
+      "y", // is your LAN VLAN-segmented? yes
+      "eth0", // base interface
+      "50", // VLAN ID
+      "192.168.1.240/29", // reservedCidr
+      "192.168.1.1", // gateway
+    ]);
+
+    const code = await runInit({ adminSocketPath: socketPath, stdout: out.stdout, stderr: out.stderr, prompt, statusDir, sleep: async () => {} });
+    expect(code).toBe(1);
+    expect(out.errLines.some((l) => l.includes("no promiscuous mode on 'eth0.50'"))).toBe(true);
+    expect(calls.find((c) => c.path === "/framework")).toBeUndefined();
+
+    const probeCall = calls.find((c) => c.path === "/network/probe-macvlan");
+    expect((probeCall!.body as { parent: string }).parent).toBe("eth0.50");
+  });
+
+  it("re-prompts on a malformed CIDR/gateway/interface answer instead of passing it through", async () => {
+    const { socketPath, statusDir, calls } = await bootFakeAdmin();
+    const out = captureOutput();
+    const prompt = scriptedPrompt([
+      "example.tld",
+      "ops@example.tld",
+      "myuser",
+      "myusername",
+      "mykey",
+      "y", // use macvlan? yes
+      "n", // is your LAN VLAN-segmented? no
+      "not an interface!", // invalid, re-prompted
+      "eth0", // valid
+      "not-a-cidr", // invalid, re-prompted
+      "192.168.1.240/29", // valid
+      "192.168.1.1",
+    ]);
+
+    const code = await runInit({ adminSocketPath: socketPath, stdout: out.stdout, stderr: out.stderr, prompt, statusDir, sleep: async () => {} });
+    expect(code).toBe(0);
+    expect(out.lines.some((l) => l.includes("invalid format"))).toBe(true);
+
+    const frameworkCall = calls.find((c) => c.path === "/framework");
+    const spec = (frameworkCall!.body as { spec: Record<string, unknown> }).spec;
+    expect(spec.network).toEqual({
+      lanInterface: "eth0",
+      macvlan: { parent: "eth0", reservedCidr: "192.168.1.240/29", gateway: "192.168.1.1" },
+    });
+  });
+
+  it("aborts cleanly when a framework document already exists and the operator declines to overwrite", async () => {
     const { socketPath, statusDir, calls } = await bootFakeAdmin({ existingFramework: { spec: { domain: "old.tld" } } });
     const out = captureOutput();
     const prompt = scriptedPrompt(["n"]); // decline overwrite

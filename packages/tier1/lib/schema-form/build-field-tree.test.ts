@@ -47,6 +47,17 @@ describe("buildFieldTree (T3.13, §5.5 composed schema)", () => {
     expect(variants.map((v) => v.discriminatorValue).sort()).toEqual(["bind", "volume"]);
   });
 
+  it("every top-level deploy-docker field has a real title and description, not a bare property-name label", () => {
+    const fields = buildFieldTree(deployDockerConfigSchema);
+    const byKey = byPath(fields);
+    for (const key of ["image", "cmd", "entrypoint", "env", "mounts", "devices", "networkMode", "ports", "capAdd", "privileged", "securityOpt", "user", "readOnly", "resources", "labels", "restart"]) {
+      const field = byKey[key];
+      expect(field?.title, `${key} should have a title`).toBeTruthy();
+      expect(field?.title, `${key}'s title should not just be its raw property key`).not.toBe(key);
+      expect(field?.description, `${key} should have a description`).toBeTruthy();
+    }
+  });
+
   it("renders the full composed service schema (core spec.expose + spec.deploy merged with the bound plugin's schema, per §5.5)", () => {
     const fields = buildFieldTree(composedServiceSchema());
     const byKey = byPath(fields);
