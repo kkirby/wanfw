@@ -529,6 +529,7 @@ export function buildProgram(deps: CliDeps): Command {
       const plan = planRes.body as { containers: string[]; networks: string[]; volumes: string[] };
       if (plan.containers.length === 0 && plan.networks.length === 0 && plan.volumes.length === 0) {
         deps.stdout("nothing to remove -- no wanfw.managed Docker objects found.");
+        deps.stdout("Next: run `docker compose down` (add `-v` for a full wipe) to remove the compose-declared containers/volumes.");
         return;
       }
 

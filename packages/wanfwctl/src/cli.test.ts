@@ -626,7 +626,7 @@ describe("wanfwctl-inner CLI", () => {
     expect(out.lines.some((l) => l.includes("[FAIL] proxy-container"))).toBe(true);
   });
 
-  async function bootUninstallRouter(opts: { unavailable?: boolean } = {}) {
+  async function bootUninstallRouter(opts: { unavailable?: boolean; empty?: boolean } = {}) {
     const calls: Array<{ removeVolumes?: boolean; dryRun?: boolean }> = [];
     const router = new JsonUdsRouter();
     router.register("POST", "/uninstall", async ({ body }) => {
@@ -635,6 +635,9 @@ describe("wanfwctl-inner CLI", () => {
       }
       const { removeVolumes, dryRun } = (body ?? {}) as { removeVolumes?: boolean; dryRun?: boolean };
       calls.push({ removeVolumes, dryRun });
+      if (opts.empty) {
+        return { status: 200, body: { containers: [], networks: [], volumes: [] } };
+      }
       return {
         status: 200,
         body: {
@@ -713,5 +716,15 @@ describe("wanfwctl-inner CLI", () => {
     const code = await runCli(["uninstall", "--yes"], { adminSocketPath: socketPath, ...out });
     expect(code).toBe(EXIT_CODES.internalError);
     expect(out.errLines.join("")).toMatch(/no Docker client is configured/);
+  });
+
+  it("uninstall: still reminds the operator to run `docker compose down` when there's nothing wanfw-managed to remove", async () => {
+    const { socketPath, calls } = await bootUninstallRouter({ empty: true });
+    const out = captureOutput();
+    const code = await runCli(["uninstall"], { adminSocketPath: socketPath, ...out });
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(calls).toEqual([{ removeVolumes: undefined, dryRun: true }]);
+    expect(out.lines.some((l) => l.includes("nothing to remove"))).toBe(true);
+    expect(out.lines.some((l) => l.includes("docker compose down"))).toBe(true);
   });
 });
