@@ -21,6 +21,7 @@ export const SECURITY_RELEVANT_TYPES = new Set([
   "secret.set",
   "secret.unset",
   "plugin.invoke.refused",
+  "framework.uninstall",
 ]);
 
 export interface AuditEntryInput {

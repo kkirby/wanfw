@@ -243,6 +243,56 @@ export function buildAdminSocketRouter(deps: AdminSocketDeps): JsonUdsRouter {
     return { status: 200, body: result };
   });
 
+  // Full teardown (operator-requested, not GC): `docker compose down` only
+  // ever sees what's declared in the compose file -- every core-authority
+  // object the orchestrator creates directly via the Docker API (the proxy
+  // container, the exposure network, every `wanfw_svc_<id>` network, and
+  // any deploy-docker-managed volume) is invisible to compose entirely
+  // (ADR-9: never written to the compose file), so `compose down` alone
+  // always leaves them behind. This removes every `wanfw.managed=true`
+  // object compose can't see, in GC's own dependency order (containers,
+  // then networks, then volumes) -- run before `docker compose down` (add
+  // `-v` there too for a full wipe of the compose-declared state/certs/
+  // secrets volumes). `removeVolumes` defaults to false: even for an
+  // intentional uninstall, destroying real service data should be an
+  // explicit, separate opt-in, not a side effect of tearing down
+  // containers/networks. `dryRun` lists what *would* be removed without
+  // touching anything, so the CLI can show the plan before asking to
+  // confirm.
+  router.register("POST", "/uninstall", async ({ body }) => {
+    const { removeVolumes, dryRun } = (body ?? {}) as { removeVolumes?: boolean; dryRun?: boolean };
+    if (!deps.docker) {
+      return { status: 501, body: { error: "docker_unavailable", message: "no Docker client configured" } };
+    }
+
+    const containers = await deps.docker.listManagedContainers();
+    const networks = await deps.docker.listManagedNetworks();
+    const volumes = removeVolumes ? await deps.docker.listManagedVolumes() : [];
+
+    if (!dryRun) {
+      for (const c of containers) await deps.docker.removeContainer(c.id);
+      for (const n of networks) await deps.docker.removeNetwork(n.id);
+      for (const v of volumes) await deps.docker.removeVolume(v.name);
+      auditLog.append({
+        type: "framework.uninstall",
+        details: {
+          removedContainers: containers.map((c) => c.name),
+          removedNetworks: networks.map((n) => n.name),
+          removedVolumes: volumes.map((v) => v.name),
+        },
+      });
+    }
+
+    return {
+      status: 200,
+      body: {
+        containers: containers.map((c) => c.name),
+        networks: networks.map((n) => n.name),
+        volumes: volumes.map((v) => v.name),
+      },
+    };
+  });
+
   router.register("POST", "/plugins/untrust", async ({ body }) => {
     const { id } = (body ?? {}) as { id?: string };
     if (!id) {
