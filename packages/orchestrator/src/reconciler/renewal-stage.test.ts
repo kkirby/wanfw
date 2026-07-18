@@ -4,9 +4,19 @@ import type { PluginInvoker, PlanGraph } from "./plan-stage.js";
 import type { FrameworkRolesHolder } from "./core-stages.js";
 import type { RenewalState } from "../renewal/scheduler.js";
 import type { ReconcileRunContext } from "./types.js";
+import type { DesiredState } from "../desired-state/index.js";
 
 function planGraph(names: string[]): PlanGraph {
   return { servicePlans: {}, routes: [], certRequirements: { mode: "internal-ca", names } };
+}
+
+function desiredStateWithDomain(domain: string): DesiredState {
+  return {
+    framework: { kind: "Framework", id: "framework", spec: { domain }, schemaVersion: 1, sourcePath: "framework" },
+    services: new Map(),
+    pluginConfigs: new Map(),
+    errors: [],
+  };
 }
 
 function fakeStore(initial?: { storedAt: string; names: string[] }) {
@@ -70,20 +80,46 @@ describe("RENEWAL stage (§9, T4.6)", () => {
       readCertMeta: store.readCertMeta,
       now: () => new Date("2026-07-12T00:00:00Z"),
     });
-    const ctx: ReconcileRunContext = { planGraph: planGraph(["kavita.example.tld"]) };
+    const ctx: ReconcileRunContext = {
+      planGraph: planGraph(["kavita.example.tld"]),
+      desiredState: desiredStateWithDomain("example.tld"),
+    };
     const result = await stage.run(ctx);
 
     expect(result.ok).toBe(true);
     expect(invokeArgs).toEqual({
       pluginId: "cert-letsencrypt-dns01",
       task: "cert.ensure",
-      args: { certName: "wildcard", names: ["kavita.example.tld"] },
+      args: { certName: "wildcard", names: ["kavita.example.tld"], zone: "example.tld" },
     });
     expect(renewalStates.read("wildcard")).toEqual({
       lastAttemptAt: "2026-07-12T00:00:00.000Z",
       lastSuccessAt: "2026-07-12T00:00:00.000Z",
       consecutiveFailures: 0,
     });
+  });
+
+  it("passes the framework's domain as 'zone' -- regression test: this used to be omitted entirely, breaking every real dns-namecheap cert.ensure call with an opaque 'reading split of undefined' error downstream", async () => {
+    const rolesHolder: FrameworkRolesHolder = { roles: { certIssuer: "cert-letsencrypt-dns01" } };
+    const store = fakeStore();
+    const renewalStates = fakeRenewalStateStore();
+    let invokeArgs: { args: unknown } | undefined;
+    const stage = buildRenewalStage({
+      invokePlugin: async (pluginId, task, args) => {
+        invokeArgs = { args };
+        return { ok: true, result: {} };
+      },
+      rolesHolder,
+      readRenewalState: renewalStates.read,
+      writeRenewalState: renewalStates.write,
+      readCertMeta: store.readCertMeta,
+    });
+    const ctx: ReconcileRunContext = {
+      planGraph: planGraph(["kavita.home.kirbatski.us"]),
+      desiredState: desiredStateWithDomain("home.kirbatski.us"),
+    };
+    await stage.run(ctx);
+    expect((invokeArgs?.args as { zone?: string }).zone).toBe("home.kirbatski.us");
   });
 
   it("triggers onCertChange after a successful renewal, to re-reconcile with the fresh cert", async () => {

@@ -2,6 +2,7 @@ import type { NamedStage, ReconcileRunContext, StageResult } from "./types.js";
 import type { PlanGraph, PluginInvoker } from "./plan-stage.js";
 import { WILDCARD_CERT_NAME } from "./plan-stage.js";
 import type { FrameworkRolesHolder } from "./core-stages.js";
+import type { DesiredState } from "../desired-state/index.js";
 import { computeRenewalDecision, isEscalated, type RenewalState } from "../renewal/scheduler.js";
 
 export interface RenewalStageDeps {
@@ -85,7 +86,18 @@ export function buildRenewalStage(deps: RenewalStageDeps): NamedStage {
         return { ok: true };
       }
 
-      const result = await deps.invokePlugin(certIssuerId, "cert.ensure", { certName: WILDCARD_CERT_NAME, names });
+      // `zone`: the registrable DNS zone the DNS-01 TXT record is published
+      // under (§9 cert-letsencrypt-dns01 requires it -- the DNS broker
+      // can't derive it from `names` alone, e.g. a service subdomain like
+      // "kavita.home.kirbatski.us" isn't itself a zone Namecheap will
+      // accept). This call used to omit it entirely, so every real
+      // cert-issuance attempt against dns-namecheap failed downstream with
+      // an opaque "Cannot read properties of undefined (reading 'split')"
+      // -- found live, root-caused via the same lastError plumbing that
+      // now actually reports it instead of swallowing it.
+      const desiredState = ctx.desiredState as DesiredState | undefined;
+      const zone = desiredState?.framework?.spec.domain as string | undefined;
+      const result = await deps.invokePlugin(certIssuerId, "cert.ensure", { certName: WILDCARD_CERT_NAME, names, zone });
       const attemptedAt = now().toISOString();
       if (result.ok) {
         deps.writeRenewalState(WILDCARD_CERT_NAME, { lastAttemptAt: attemptedAt, lastSuccessAt: attemptedAt, consecutiveFailures: 0 });
