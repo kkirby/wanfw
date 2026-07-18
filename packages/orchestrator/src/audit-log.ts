@@ -100,13 +100,43 @@ export class AuditLog {
     return entry;
   }
 
+  /**
+   * Tolerates a malformed line rather than throwing -- this runs at every
+   * boot (the constructor calls it to resume seq/hash), so a single bad
+   * line would otherwise permanently crash-loop the orchestrator with no
+   * way to recover short of hand-editing the file inside the container.
+   * A truncated *final* line (process killed/OOM'd mid-`appendFileSync`,
+   * a real thing that happens) is dropped silently: that append never
+   * actually completed, so nothing is lost that was ever counted as
+   * having landed. A malformed line anywhere *else* is not the expected
+   * partial-write shape -- it's surfaced loudly instead, since it could
+   * be corruption or tampering rather than an interrupted append, but
+   * boot still must not crash over it; `verify()` (§12.3's real integrity
+   * check, run explicitly via `wanfwctl audit tail --verify`, not at
+   * every boot) will catch the resulting prevHash-chain gap regardless.
+   */
   readAll(): AuditEntry[] {
     if (!existsSync(this.logPath)) return [];
     const raw = readFileSync(this.logPath, "utf8");
-    return raw
-      .split("\n")
-      .filter((line) => line.trim() !== "")
-      .map((line) => JSON.parse(line) as AuditEntry);
+    const lines = raw.split("\n").filter((line) => line.trim() !== "");
+    const entries: AuditEntry[] = [];
+    lines.forEach((line, i) => {
+      try {
+        entries.push(JSON.parse(line) as AuditEntry);
+      } catch (err) {
+        const message = (err as Error).message;
+        if (i === lines.length - 1) {
+          process.stderr.write(
+            `[audit-log] dropping truncated final line in ${this.logPath} (${message}) -- likely an interrupted write, not tampering\n`,
+          );
+        } else {
+          process.stderr.write(
+            `[audit-log] WARNING: unparseable line ${i + 1}/${lines.length} in ${this.logPath} (${message}) -- skipping it, but this is unexpected; audit history may be incomplete. Run \`wanfwctl audit tail --verify\` once the orchestrator is back up.\n`,
+          );
+        }
+      }
+    });
+    return entries;
   }
 
   /** Recomputes the hash chain and checks every checkpoint signature. */

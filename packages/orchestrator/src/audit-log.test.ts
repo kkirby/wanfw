@@ -100,6 +100,65 @@ describe("AuditLog", () => {
     expect(result.reason).toBe("checkpoint signature invalid");
   });
 
+  it("readAll drops a truncated final line instead of throwing (interrupted write, e.g. an OOM-kill mid-append)", async () => {
+    const { log, logPath } = await freshLog();
+    log.append({ type: "log.emit", details: { a: 1 } });
+    log.append({ type: "log.emit", details: { a: 2 } });
+
+    const raw = readFileSync(logPath, "utf8");
+    const lines = raw.split("\n").filter((l) => l.trim() !== "");
+    // Simulate a write that was cut off partway through the JSON.
+    const truncated = lines[1]!.slice(0, Math.floor(lines[1]!.length / 2));
+    writeFileSync(logPath, `${lines[0]}\n${truncated}`);
+
+    expect(() => log.readAll()).not.toThrow();
+    const entries = log.readAll();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.details.a).toBe(1);
+  });
+
+  it("the constructor does not throw and boots cleanly when the log file's final line is truncated -- the actual boot-crash scenario", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wanfw-audit-"));
+    dirs.push(dir);
+    const signingKey = await SigningKeyManager.loadOrCreate(join(dir, "signing.key"));
+    const logPath = join(dir, "audit.jsonl");
+
+    const first = new AuditLog(logPath, () => signingKey);
+    const e1 = first.append({ type: "log.emit", details: { a: 1 } });
+    first.append({ type: "log.emit", details: { a: 2 } }); // this is the one that'll be truncated below
+
+    const raw = readFileSync(logPath, "utf8");
+    writeFileSync(logPath, raw.slice(0, -5)); // truncate mid-entry (into the 2nd line), no trailing newline
+
+    let second: AuditLog | undefined;
+    expect(() => {
+      second = new AuditLog(logPath, () => signingKey);
+    }).not.toThrow();
+
+    // Recovers seq/hash from the last entry that actually parsed (e1, since
+    // e2's line was the truncated one and gets dropped), so the chain
+    // continues correctly rather than restarting from genesis or skipping
+    // ahead as if the truncated entry had landed.
+    const e3 = second!.append({ type: "log.emit", details: { a: 3 } });
+    expect(e3.seq).toBe(2);
+    expect(e3.prevHash).toBe(e1.hash);
+  });
+
+  it("readAll skips a malformed non-final line (loudly, but without throwing) and keeps reading the rest of the file", async () => {
+    const { log, logPath } = await freshLog();
+    log.append({ type: "log.emit", details: { a: 1 } });
+    log.append({ type: "log.emit", details: { a: 2 } });
+    log.append({ type: "log.emit", details: { a: 3 } });
+
+    const raw = readFileSync(logPath, "utf8");
+    const lines = raw.split("\n").filter((l) => l.trim() !== "");
+    lines[1] = "{not valid json";
+    writeFileSync(logPath, lines.join("\n") + "\n");
+
+    const entries = log.readAll();
+    expect(entries.map((e) => e.details.a)).toEqual([1, 3]);
+  });
+
   it("resumes seq/hash chain correctly across a process restart", async () => {
     const dir = mkdtempSync(join(tmpdir(), "wanfw-audit-"));
     dirs.push(dir);
