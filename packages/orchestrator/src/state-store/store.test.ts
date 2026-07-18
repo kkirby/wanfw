@@ -2,7 +2,9 @@ import { describe, expect, it, afterEach } from "vitest";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { StateStore, IpamExhaustedError } from "./store.js";
+import { MIGRATIONS } from "./migrations.js";
 
 describe("StateStore", () => {
   const dirs: string[] = [];
@@ -212,6 +214,45 @@ describe("StateStore", () => {
       expect(() => store.allocateIp("tiny")).toThrow(/no free addresses/);
     });
 
+    it("allocateIp with an owner reuses the same address on repeat calls instead of leaking a fresh one every time", () => {
+      const { store } = openTestStore();
+      store.setIpamRange({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.241" });
+      const first = store.allocateIp("macvlan", "shared-proxy");
+      const second = store.allocateIp("macvlan", "shared-proxy");
+      const third = store.allocateIp("macvlan", "shared-proxy");
+      expect(second).toBe(first);
+      expect(third).toBe(first);
+      expect(store.listIpamAllocations("macvlan")).toHaveLength(1);
+    });
+
+    it("allocateIp with different owners gets distinct addresses", () => {
+      const { store } = openTestStore();
+      store.setIpamRange({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.241" });
+      const a = store.allocateIp("macvlan", "shared-proxy");
+      const b = store.allocateIp("macvlan", "dedicated-proxy");
+      expect(a).not.toBe(b);
+      expect(store.listIpamAllocations("macvlan")).toHaveLength(2);
+    });
+
+    it("allocateIp without an owner keeps allocating fresh addresses every call (legacy behavior)", () => {
+      const { store } = openTestStore();
+      store.setIpamRange({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.241" });
+      const a = store.allocateIp("macvlan");
+      const b = store.allocateIp("macvlan");
+      expect(a).not.toBe(b);
+    });
+
+    it("allocateIp with an owner re-allocates a fresh address once the owned one has been released", () => {
+      const { store } = openTestStore();
+      store.setIpamRange({ id: "macvlan", cidr: "192.168.1.240/29", gateway: "192.168.1.241" });
+      const first = store.allocateIp("macvlan", "shared-proxy");
+      store.releaseIp(first);
+      const second = store.allocateIp("macvlan", "shared-proxy");
+      expect(second).toBe(first); // still the first free host in the CIDR, just re-allocated
+      // Same IP -> same PRIMARY KEY row, upserted in place, not a new row.
+      expect(store.listIpamAllocations("macvlan", true)).toHaveLength(1);
+    });
+
     it("releaseIp frees the address for immediate reallocation", () => {
       const { store } = openTestStore();
       store.setIpamRange({ id: "tiny", cidr: "10.0.0.0/30", gateway: "10.0.0.1" });
@@ -281,6 +322,41 @@ describe("StateStore", () => {
       // the "restarted" allocation table is still authoritative -- the same address is still taken
       const allocatedNow = new Set(second.listIpamAllocations("macvlan").map((r) => r.ip));
       expect(allocatedNow.has(ip)).toBe(true);
+    });
+
+    it("migration 2 self-heals a range already exhausted by the pre-owner-column leak, by releasing every orphaned (ownerless) allocation", () => {
+      // Simulates a db that only ever saw migration 1 (pre-fix): every
+      // reconcile minted a fresh, never-released allocation with no
+      // owner, eventually exhausting the range -- exactly the leak found
+      // in production. Hand-builds that state with raw better-sqlite3
+      // (StateStore always applies every migration, so this is the only
+      // way to reproduce a "stuck on migration 1" db), then opens it via
+      // StateStore and confirms migration 2 releases the leaked rows so
+      // the range is usable again.
+      const dir = mkdtempSync(join(tmpdir(), "wanfw-state-"));
+      dirs.push(dir);
+      const dbPath = join(dir, "state.sqlite3");
+
+      const raw = new Database(dbPath);
+      raw.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (id INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`);
+      raw.exec(MIGRATIONS[0]!.sql);
+      raw.prepare("INSERT INTO schema_migrations (id, applied_at) VALUES (1, ?)").run(new Date().toISOString());
+      raw.prepare("INSERT INTO ipam_ranges (id, cidr, gateway) VALUES ('macvlan', '10.0.0.0/29', '10.0.0.1')").run();
+      // Fill every usable host (10.0.0.2..10.0.0.6) with leaked, unreleased, ownerless allocations.
+      for (const ip of ["10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5", "10.0.0.6"]) {
+        raw.prepare("INSERT INTO ipam_allocations (ip, range_id, allocated_at) VALUES (?, 'macvlan', ?)").run(ip, new Date().toISOString());
+      }
+      raw.close();
+
+      const store = new StateStore(dbPath);
+      stores.push(store);
+
+      // Every previously-leaked row is now released (self-healed)...
+      expect(store.listIpamAllocations("macvlan")).toHaveLength(0);
+      expect(store.listIpamAllocations("macvlan", true)).toHaveLength(5);
+      // ...so the range is usable again, and owner-based reuse works from here on.
+      const ip = store.allocateIp("macvlan", "shared-proxy");
+      expect(store.allocateIp("macvlan", "shared-proxy")).toBe(ip);
     });
   });
 });

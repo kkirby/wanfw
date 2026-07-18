@@ -79,6 +79,27 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    id: 2,
+    // Fixes a real leak: `network-macvlan`'s plan-time `ipam.allocate`
+    // call had no idempotency key, so every single reconcile (the 60s
+    // timer alone, never mind a crash-loop restarting on every boot)
+    // permanently allocated a *new* address for the same static proxy IP
+    // and never released the previous one -- silently exhausting the
+    // reserved range over time, at which point PLAN starts failing outright
+    // (blocking every stage downstream of it, including cert renewal).
+    // `owner` lets `allocateIp` reuse the same address for the same
+    // logical resource (keyed by `EndpointRequest.purpose`) instead of
+    // minting a fresh one every time. Every row that predates this column
+    // is, by construction, one of these orphaned leaks (nothing before
+    // this migration could have set an owner) -- soft-released here so a
+    // range that's already exhausted self-heals on the next boot instead
+    // of requiring an operator to hand-edit the sqlite file.
+    sql: `
+      ALTER TABLE ipam_allocations ADD COLUMN owner TEXT;
+      UPDATE ipam_allocations SET released_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE released_at IS NULL AND owner IS NULL;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

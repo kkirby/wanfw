@@ -53,6 +53,8 @@ export interface IpamAllocationRow {
   range_id: string;
   allocated_at: string;
   released_at: string | null;
+  /** Stable idempotency key (e.g. `EndpointRequest.purpose`) so a repeat `allocateIp(rangeId, owner)` call for the same logical resource reuses its existing address instead of minting a new one every reconcile. Null for pre-owner-column rows and for callers that never pass one (kept legacy-compatible; those always allocate fresh, same as before). */
+  owner: string | null;
 }
 
 export class IpamExhaustedError extends Error {}
@@ -270,20 +272,38 @@ export class StateStore {
   }
 
   /**
-   * `ipam.allocate(rangeId)` (§6.6, ADR-1): the *first* host address in the
-   * range's CIDR (excluding network, broadcast, and the range's own
-   * gateway) that has no live allocation row -- a released IP is eligible
-   * for reuse immediately, but a currently-allocated one, or an address
-   * outside the current CIDR, never is. Runs inside a transaction so two
-   * concurrent allocate calls can never race onto the same IP (the
-   * PRIMARY KEY insert would fail the loser, but a transaction avoids ever
-   * attempting the collision in the first place -- fewer surprising error
-   * paths for a network-provider plugin driving this).
+   * `ipam.allocate(rangeId, owner?)` (§6.6, ADR-1): the *first* host
+   * address in the range's CIDR (excluding network, broadcast, and the
+   * range's own gateway) that has no live allocation row -- a released IP
+   * is eligible for reuse immediately, but a currently-allocated one, or
+   * an address outside the current CIDR, never is. Runs inside a
+   * transaction so two concurrent allocate calls can never race onto the
+   * same IP (the PRIMARY KEY insert would fail the loser, but a
+   * transaction avoids ever attempting the collision in the first place --
+   * fewer surprising error paths for a network-provider plugin driving
+   * this).
+   *
+   * `owner` is an idempotency key for a stable logical resource (e.g. the
+   * macvlan proxy's own static IP, keyed by `EndpointRequest.purpose`):
+   * when given and a live allocation already exists for this exact
+   * `(rangeId, owner)` pair, that same IP is returned rather than minting
+   * a new one. Without this, a caller that re-plans on every reconcile
+   * (as PLAN does, every ~60s) would permanently leak one address per
+   * cycle -- found in production exhausting a real deployment's reserved
+   * range within days. Omitting `owner` keeps the old always-allocate-fresh
+   * behavior, for callers that genuinely want a new address every time.
    */
-  allocateIp(rangeId: string): string {
+  allocateIp(rangeId: string, owner?: string): string {
     return this.db.transaction(() => {
       const range = this.getIpamRange(rangeId);
       if (!range) throw new Error(`no ipam range registered with id '${rangeId}'`);
+
+      if (owner) {
+        const existing = this.db
+          .prepare("SELECT ip FROM ipam_allocations WHERE range_id = ? AND owner = ? AND released_at IS NULL")
+          .get(rangeId, owner) as { ip: string } | undefined;
+        if (existing) return existing.ip;
+      }
 
       const allocated = new Set(
         (
@@ -300,10 +320,10 @@ export class StateStore {
 
       this.db
         .prepare(
-          `INSERT INTO ipam_allocations (ip, range_id, allocated_at) VALUES (?, ?, ?)
-           ON CONFLICT(ip) DO UPDATE SET range_id = excluded.range_id, allocated_at = excluded.allocated_at, released_at = NULL`,
+          `INSERT INTO ipam_allocations (ip, range_id, allocated_at, owner) VALUES (?, ?, ?, ?)
+           ON CONFLICT(ip) DO UPDATE SET range_id = excluded.range_id, allocated_at = excluded.allocated_at, released_at = NULL, owner = excluded.owner`,
         )
-        .run(candidate, rangeId, new Date().toISOString());
+        .run(candidate, rangeId, new Date().toISOString(), owner ?? null);
 
       return candidate;
     })();
