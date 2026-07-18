@@ -201,8 +201,13 @@ export interface FrameworkDoc {
 /** Read-only mirror of the framework document `wanfwctl init`/the setup wizard writes (§5.3) -- tier1 has no path to admin.sock and must never be able to author it, only display it. */
 export async function getFramework(): Promise<FrameworkDoc | undefined> {
   const res = await orchRequest("GET", "/framework");
-  const framework = (res.body as { framework: FrameworkDoc | null } | undefined)?.framework;
-  return framework ?? undefined;
+  // The stored document is the full envelope ({schemaVersion, kind, metadata, spec}),
+  // matching wanfwctl's own `framework set`/`framework show` shape -- FrameworkDoc
+  // here is just `spec`, so it has to be unwrapped, not cast straight through
+  // (the previous `as` was a type-level lie: `framework.roles` was always
+  // undefined at runtime, since the real field is `framework.spec.roles`).
+  const stored = (res.body as { framework: { spec: FrameworkDoc } | null } | undefined)?.framework;
+  return stored?.spec ?? undefined;
 }
 
 export interface AuditEntry {

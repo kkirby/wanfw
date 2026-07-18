@@ -83,6 +83,18 @@ export function buildRenewalStage(deps: RenewalStageDeps): NamedStage {
       });
 
       if (!decision.due) {
+        // A live, matching cert plus leftover failure bookkeeping means
+        // the cert was issued out-of-band since the last failed attempt
+        // this stage recorded -- most plausibly a manual `wanfwctl plugin
+        // invoke cert.ensure` while debugging (a real path operators used
+        // live, since it bypasses this stage's own backoff entirely).
+        // Without this, `wanfwctl cert list` / tier1's Certs page keep
+        // showing a stale "N failed attempt(s)" and the old error message
+        // forever, even though the cert is now healthy -- found live,
+        // right after such a manual recovery.
+        if (namesMatch && state.consecutiveFailures > 0) {
+          deps.writeRenewalState(WILDCARD_CERT_NAME, { lastSuccessAt: meta!.storedAt, consecutiveFailures: 0 });
+        }
         return { ok: true };
       }
 
